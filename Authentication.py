@@ -1,5 +1,6 @@
 import os.path
 import io
+import os
 from typing import List
 
 from google.auth.transport.requests import Request
@@ -61,6 +62,9 @@ class GoogleDriveAPI:
     def download_file(self, file_id: str, file_name: str, destination_path=".") -> bool:
         """Baixa um arquivo específico do Google Drive."""
         try:
+            # Garante que o diretório de destino exista
+            os.makedirs(destination_path, exist_ok=True)
+
             request = self.service.files().get_media(fileId=file_id)
             fh = io.BytesIO()
             downloader = MediaIoBaseDownload(fh, request)
@@ -79,6 +83,8 @@ class GoogleDriveAPI:
 
     def download_multiple_files(self, file_ids: List[str], destination_path="."):
         """Baixa múltiplos arquivos do Google Drive."""
+        # Garante que o diretório de destino exista
+        os.makedirs(destination_path, exist_ok=True)
         for file_id in file_ids:
             try:
                 file = self.service.files().get(fileId=file_id, fields="name").execute()
