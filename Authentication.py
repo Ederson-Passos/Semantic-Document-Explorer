@@ -10,18 +10,31 @@ from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from googleapiclient.http import MediaIoBaseDownload
 
+# Define os escopos de permissão necessários para acessar o Google Drive.
+# "drive" permite acesso total (leitura, escrita, etc.) aos arquivos do usuário.
 SCOPES = ["https://www.googleapis.com/auth/drive"]
+# Nome do arquivo que contém as credenciais da API do Google Cloud (OAuth 2.0 client ID).
 CREDENTIALS_FILE = "credentials.json"
+# Nome do arquivo onde o token de acesso do usuário será armazenado após a autenticação.
 TOKEN_FILE = "token.json"
 
 class GoogleDriveAPI:
+    """
+    Classe para interagir com a API do Google Drive v3.
+    Gerencia a autenticação, listagem e download de arquivos.
+    """
     def __init__(self):
-        """Inicializa a classe e tenta autenticar com o Google Drive."""
+        """Inicializa a classe e inicia o processo de autenticação."""
+        # Armazena IDs de pastas já visitadas durante a listagem recursiva.
         self._processed_folders = set()
+        # Chama o método para autenticar e obter o objeto de serviço da API.
         self.service = self._authenticate()
 
     def _authenticate(self):
-        """Autentica o usuário e retorna um objeto de serviço do Google Drive API."""
+        """
+        Autentica o usuário e retorna um objeto de serviço do Google Drive API.
+        Retorna um objeto "resource" do Google API Client Library para interagir com o Drive.
+        """
         creds = None
         # Verifica se o arquivo token.json existe e carrega as credenciais.
         if os.path.exists(TOKEN_FILE):
@@ -42,12 +55,19 @@ class GoogleDriveAPI:
         return build("drive", "v3", credentials=creds)
 
     def list_files(self, folder_id: str, page_size: int = 100) -> List[dict]:
-        """Lista os arquivos dentro de uma pasta específica do Google Drive.
+        """Lista os arquivos (não pastas) dentro de uma pasta específica do Google Drive.
         Args:
-            folder_id: o ID da pasta do Google Drive a ser pesquisado.
+            folder_id: o ID da pasta do Google Drive a ser pesquisada.
             page_size: número máximo de arquivos a serem listados por página.
-        Returns: Uma lista de dicionários, onde cada dicionário representa um arquivo."""
+        Returns: Uma lista de dicionários, onde cada dicionário representa um arquivo ou uma lista vazia.
+        """
+        # Verifica se o serviço foi inicializado corretamente
+        if not self.service:
+            print("Erro: Serviço do Google Drive não inicializado.")
+            return []
         try:
+            # Constrói a query para buscar arquivos que estão dentro da pasta especificada (parents) e que
+            # não são pastas (mimeType != ...).
             query = f"'{folder_id}' in parents and mimeType != 'application/vnd.google-apps.folder'"
 
             results = self.service.files().list(q=query, pageSize=page_size, fields="nextPageToken, files(id, name)").execute()
@@ -64,9 +84,21 @@ class GoogleDriveAPI:
         except HttpError as e:
             print(f"Ocorreu um erro ao listar os arquivos da pasta {folder_id}: {e}")
             return []
+        except Exception as e:
+            print(f"Ocorreu um erro inesperado ao listar arquivos: {e}")
+            return []
 
     def list_files_recursively(self, folder_id: str) -> List[dict]:
-        """Lista todos os arquivos dentro de uma pasta específica e de todas as subpastas."""
+        """
+        Lista todos os arquivos dentro de uma pasta específica e de todas as subpastas de forma recursiva.
+        Evita loops infinitos rastreando pastas visitadas.
+        Retorno: uma lista de dicionários contenco id e nome de todos os arquivos encontrados ou uma lista vazia.
+        """
+        # Verifica se o serviço foi inicializado corretamente
+        if not self.service:
+            print("Erro: Serviço do Google Drive não inicializado.")
+            return []
+
         # Limpa o set de pastas processadas no início de uma nova chamada de alto nível.
         if not hasattr(self, '_processed_folders') or folder_id not in self._processed_folders:
             if hasattr(self, '_processed_folders'):
@@ -74,7 +106,9 @@ class GoogleDriveAPI:
             else:
                 self._processed_folders = set()
 
+        # Lista para armazenar todos os arquivos encontrados
         all_files = []
+        # Token para controlar a paginação da API
         page_token = None
 
         # Adiciona a pasta atual ao set de processadas para evitar ciclos repetitivos
@@ -86,6 +120,7 @@ class GoogleDriveAPI:
             try:
                 # Query para buscar arquivos e pastas dentro da pasta atual
                 query = f"'{folder_id}' in parents"
+                # Executa a chamada à API. Pede id, nome e mimeType para diferenciar arquivos de pastas.
                 results = self.service.files().list(
                     q=query,
                     pageSize=100,
@@ -101,7 +136,7 @@ class GoogleDriveAPI:
                     item_name = item.get('name', 'Nome Desconhecido')
 
                     # Se for uma subpasta, será acessada (recursão)
-                    if 'mimetype' in item and item['mimetype'] == 'application/vnd.google-apps.folder':
+                    if 'mimeType' in item and item['mimeType'] == 'application/vnd.google-apps.folder':
                         # Verifica se já foi processada anteriormente
                         if item_id not in self._processed_folders:
                             print(f"Recursão -> Entrando na subpasta: '{item_name}' (ID: {item_id})")
@@ -114,9 +149,10 @@ class GoogleDriveAPI:
                     # É um arquivo ao invés de uma subpasta, adiciona à lista
                     # Ou não possui mimetype
                     else:
-                        print(f"Encontrado item (não pasta): '{item_name}' (ID: {item_id}), Mimetype: {item.get('mimetype')}")
+                        print(f"Encontrado item (não pasta): '{item_name}' (ID: {item_id}), Mimetype: {item.get('mimeType')}")
                         all_files.append({'id': item_id, 'name': item_name})
 
+                # Obtém o token para a próxima página. Se for None, não há mais páginas.
                 page_token = results.get('nextPageToken', None)
                 if page_token is None:
                     break # Não há mais páginas, sai do laço while
@@ -135,7 +171,7 @@ class GoogleDriveAPI:
 
 
     def download_file(self, file_id: str, file_name: str, destination_path=".") -> bool:
-        """Baixa um arquivo específico do Google Drive."""
+        """Baixa um arquivo específico do Google Drive para um diretório local."""
         try:
             # Garante que o diretório de destino exista
             os.makedirs(destination_path, exist_ok=True)
@@ -164,7 +200,7 @@ class GoogleDriveAPI:
             return False
 
     def download_multiple_files(self, file_ids_and_names: List[str], destination_path="."):
-        """Baixa múltiplos arquivos do Google Drive."""
+        """Baixa múltiplos arquivos do Google Drive a partir de uma lista de dicionários."""
         # Garante que o diretório de destino exista
         os.makedirs(destination_path, exist_ok=True)
         total_files = len(file_ids_and_names)
@@ -195,21 +231,23 @@ class GoogleDriveAPI:
         print(f"-----------------------------------")
 
 if __name__ == "__main__":
+    # Substituir pelo id da pasta alvo.
     TARGET_FOLDER_ID = "1YJFQnLQfz30ZAXoR8CWSlKGkkEupcPfm"
 
+    # Instancia a classe GoogleDriveAPI, disparando a autenticação.
     drive_api = GoogleDriveAPI()
 
-    # Listar arquivos RECURSIVAMENTE a partir da pasta alvo
+    # Listar arquivos recursivamente a partir da pasta alvo
     print(f"\n=== Iniciando Listagem Recursiva a partir da Pasta ID: {TARGET_FOLDER_ID} ===")
-    # Chama o NOVO método recursivo
+    # Chama o método recursivo
     all_files_recursive = drive_api.list_files_recursively(folder_id=TARGET_FOLDER_ID)
     print(f"\n=== Listagem Recursiva Concluída ===")
     print(f"Total de arquivos encontrados em '{TARGET_FOLDER_ID}' e subpastas: {len(all_files_recursive)}")
 
     if all_files_recursive:
-        # Mostrar os primeiros 2 arquivos encontrados como exemplo
-        print("\nPrimeiros 2 arquivos encontrados:")
-        for f in all_files_recursive[:2]:
+        # Mostrar todos os arquivos encontrados
+        print("\nLista de todos os arquivos encontrados:")
+        for f in all_files_recursive:
             print(f" - {f.get('name', 'Nome Indisponível')} (ID: {f.get('id', 'ID Indisponível')})")
 
     else:
