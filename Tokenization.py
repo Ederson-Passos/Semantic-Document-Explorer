@@ -8,6 +8,12 @@ try:
 except LookupError:
     nltk.download('punkt')
 
+# Verificando se o recurso punkt_tab está baixado
+try:
+    nltk.data.find('tokenizers/punkt_tab')
+except LookupError:
+    nltk.download('punkt_tab')
+
 def remove_special_characters(text):
     """Remove caracteres especiais do texto."""
     text = re.sub(r"[^a-zA-Z\s]", "", text) # Mantém apenas letras e espaços
