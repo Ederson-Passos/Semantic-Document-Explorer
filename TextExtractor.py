@@ -2,7 +2,12 @@ import PyPDF2
 from docx import Document
 from openpyxl import load_workbook
 from pptx import Presentation
+import os
+from Tokenization import preprocess_text
 
+# Diretório temporário para download
+TEMP_DOWNLOAD_FOLDER = "temp_download"
+os.makedirs(TEMP_DOWNLOAD_FOLDER, exist_ok=True)
 
 def extract_text_from_pdf(file_path):
     """Extrai texto de um arquivo PDF."""
@@ -17,7 +22,6 @@ def extract_text_from_pdf(file_path):
 
     return text
 
-
 def extract_text_from_docx(file_path):
     """Extrai texto de um arquivo DOCX."""
     text = ""
@@ -30,7 +34,6 @@ def extract_text_from_docx(file_path):
 
     return text
 
-
 def extract_text_from_txt(file_path):
     """Extrai texto de um arquivo TXT."""
     text = ""
@@ -41,7 +44,6 @@ def extract_text_from_txt(file_path):
         print(f"Erro ao extrair texto do TXT: {e}")
 
     return text
-
 
 def extract_text_from_xlsx(file_path):
     """Extrai texto de um arquivo XLSX."""
@@ -57,7 +59,6 @@ def extract_text_from_xlsx(file_path):
         print(f"Erro ao extrair texto do XLSX: {e}")
 
     return text
-
 
 def extract_text_from_ppt(file_path):
     """Extrai texto de um arquivo PPT."""
@@ -76,22 +77,43 @@ def extract_text_from_ppt(file_path):
 
     return text
 
+def extract_text(file_path):
+    """Função genérica para extrair texto com base na extensão do arquivo."""
+    if file_path.endswith(".pdf"):
+        return extract_text_from_pdf(file_path)
+    elif file_path.endswith(".docx"):
+        return extract_text_from_docx(file_path)
+    elif file_path.endswith(".txt"):
+        return extract_text_from_txt(file_path)
+    elif file_path.endswith(".xlsx"):
+        return extract_text_from_xlsx(file_path)
+    elif file_path.endswith(".pptx") or file_path.endswith(".ppt"):
+        return extract_text_from_ppt(file_path)
+    else:
+        print(f"Formato de arquivo não suportado para: {file_path}")
+        return ""
 
-def extractor(files):
-    for file in files:
-        file_name = file["name"]
-        file_path = file_name  # Assumindo que o arquivo foi baixado no mesmo diretório
-        if file_name.endswith(".pdf"):
-            text = extract_text_from_pdf(file_path)
-        elif file_name.endswith(".docx"):
-            text = extract_text_from_docx(file_path)
-        elif file_name.endswith(".txt"):
-            text = extract_text_from_txt(file_path)
-        elif file_name.endswith(".xlsx"):
-            text = extract_text_from_xlsx(file_path)
-        else:
-            text = ""
-        if text:
-            print(f"Texto extraído de {file_name}:\n{text}\n")
+def process_and_tokenize_file(file_path):
+    """Extrai texto de um arquivo e o tokeniza."""
+    text = extract_text(file_path)
 
-    return text
+    if text:
+        tokens = preprocess_text(text) # Retorna tokens
+        # Mostra os 20 primeiros tokens.
+        print(f"Texto tokenizado de '{os.path.basename(file_path)}':\n{tokens[:20]}...\n")
+        return os.path.basename(file_path), tokens
+    else:
+        print(f"Não foi possível extrair texto de '{os.path.basename(file_path)}'.")
+        return os.path.basename(file_path), None
+
+def cleanup_temp_folder():
+    """Limpa o diretório temporário de download."""
+    for filename in os.listdir(TEMP_DOWNLOAD_FOLDER):
+        file_path = os.path.join(TEMP_DOWNLOAD_FOLDER, filename)
+        try:
+            if os.path.isfile(file_path) or os.path.islink(file_path):
+                os.unlink(file_path)
+        except Exception as e:
+            print(f"Erro ao remover {file_path}: {e}")
+    os.rmdir(TEMP_DOWNLOAD_FOLDER)
+    print(f"Diretório temporário '{TEMP_DOWNLOAD_FOLDER}' limpo.")
