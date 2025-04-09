@@ -5,7 +5,7 @@ from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 
-from DataBaseManager import DataBaseManager # Importe a classe de gerenciamento
+from DataBaseManager import DataBaseManager
 
 # Define os escopos de permissão necessários para acessar o Google Drive.
 SCOPES = ["https://www.googleapis.com/auth/drive"]
@@ -49,6 +49,7 @@ class GoogleDriveAPI:
 
 if __name__ == "__main__":
     # Substituir pelo id da pasta alvo.
+
     TARGET_FOLDER_ID = "1h4ZbeAtdo5uYEqYHkzdz_0kBSt2DW0A9"
 
     # Instancia a classe GoogleDriveAPI, disparando a autenticação e criando o serviço.
@@ -69,7 +70,7 @@ if __name__ == "__main__":
 
     # Processa todos os arquivos recursivamente, baixa, extrai e tokeniza.
     print(f"\n=== Iniciando o processamento recursivo de arquivos a partir da Pasta ID: {TARGET_FOLDER_ID} ===")
-    tokenized_data = drive_api.drive_service.process_all_files_recursively(TARGET_FOLDER_ID)
+    tokenized_data = drive_api.drive_service.process_and_embed_all_files_recursively(TARGET_FOLDER_ID)
     print(f"\n=== Processamento de arquivos concluído. ===")
 
     if tokenized_data:
@@ -78,6 +79,21 @@ if __name__ == "__main__":
             print(f"- {filename}: {len(tokens)} tokens")
     else:
         print("\nNenhum arquivo foi processado.")
+
+    # Inicia o processamento e geração de embeddings com TensorFlow
+    print(f"\n=== Iniciando o processamento recursivo de arquivos e geração de embeddings (TensorFlow) a partir da "
+          f"Pasta ID: {TARGET_FOLDER_ID} ===")
+    embeddings_data = drive_api.drive_service.process_and_embed_all_files_recursively(TARGET_FOLDER_ID)
+    print(f"\n=== Processamento de arquivos e geração de embeddings (TensorFlow) concluídos. ===")
+
+    if embeddings_data:
+        print("\nCaminhos para os arquivos de embedding gerados (TensorFlow):")
+        for filename, embedding_files in embeddings_data.items():
+            print(f"- {filename}:")
+            for emb_file in embedding_files:
+                print(f"  - {emb_file}")
+    else:
+        print("\nNenhum embedding foi gerado.")
 
     # Limpa o diretório temporário
     drive_api.drive_service.cleanup_temp_folder()
