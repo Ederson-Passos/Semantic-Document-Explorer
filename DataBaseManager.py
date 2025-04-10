@@ -1,9 +1,8 @@
 import os.path
 import io
 import os
-from typing import List, Optional
+from typing import List
 
-from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from googleapiclient.http import MediaIoBaseDownload
 
