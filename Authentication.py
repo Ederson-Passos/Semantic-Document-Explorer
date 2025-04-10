@@ -21,7 +21,7 @@ class GoogleDriveAPI:
     def __init__(self):
         """Inicializa a classe e inicia o processo de autenticação."""
         self.service = self._authenticate()
-        self.drive_service = DataBaseManager(self.service) # Cria uma instância do gerenciamento
+        # self.drive_service = DataBaseManager(self.service) # Cria uma instância do gerenciamento
 
     def _authenticate(self):
         """
@@ -48,49 +48,5 @@ class GoogleDriveAPI:
         return build("drive", "v3", credentials=creds)
 
 if __name__ == "__main__":
-    # Substituir pelo id da pasta alvo.
-    TARGET_FOLDER_ID = "1rsT24ticiIyH055TYVEcuynCPLwrOxbd"
-
-    # Instancia a classe GoogleDriveAPI, disparando a autenticação e criando o serviço.
     drive_api = GoogleDriveAPI()
-
-    # Utiliza a classe de serviço para realizar as operações do Google Drive.
-    print(f"\n=== Iniciando Listagem Recursiva a partir da Pasta ID: {TARGET_FOLDER_ID} ===")
-    all_files_recursive = drive_api.drive_service.list_files_recursively(folder_id=TARGET_FOLDER_ID)
-    print(f"\n=== Listagem Recursiva Concluída ===")
-    print(f"Total de arquivos encontrados em '{TARGET_FOLDER_ID}' e subpastas: {len(all_files_recursive)}")
-
-    if all_files_recursive:
-        print("\nLista de todos os arquivos encontrados:")
-        for f in all_files_recursive:
-            print(f" - {f.get('name', 'Nome Indisponível')} (ID: {f.get('id', 'ID Indisponível')})")
-    else:
-        print(f"\nNenhum arquivo foi encontrado recursivamente dentro da pasta {TARGET_FOLDER_ID}.")
-
-    # Processa todos os arquivos recursivamente e tokeniza.
-    print(f"\n=== Iniciando o processamento recursivo de arquivos para tokenização a partir da Pasta ID: {TARGET_FOLDER_ID} ===")
-    tokenized_data = drive_api.drive_service.process_and_embed_all_files_recursively(TARGET_FOLDER_ID)
-    print(f"\n=== Processamento de arquivos para tokenização concluído. ===")
-
-    if tokenized_data:
-        print("\nArquivos processados e tokenizados:")
-    else:
-        print("\nNenhum arquivo foi processado para tokenização.")
-
-    # Inicia o processamento e geração de embeddings com TensorFlow
-    print(f"\n=== Iniciando o processamento recursivo de arquivos e geração de embeddings (TensorFlow) a partir da "
-          f"Pasta ID: {TARGET_FOLDER_ID} ===")
-    embeddings_data = drive_api.drive_service.process_and_embed_all_files_recursively(TARGET_FOLDER_ID)
-    print(f"\n=== Processamento de arquivos e geração de embeddings (TensorFlow) concluídos. ===")
-
-    if embeddings_data:
-        print("\nCaminhos para os arquivos de embedding gerados (TensorFlow):")
-        for filename, embedding_files in embeddings_data.items():
-            print(f"- {filename}:")
-            for emb_file in embedding_files:
-                print(f"  - {emb_file}")
-    else:
-        print("\nNenhum embedding foi gerado.")
-
-    # Limpa o diretório temporário
-    drive_api.drive_service.cleanup_temp_folder()
+    print("Serviço do Google Drive autenticado com sucesso (dentro de Authentication.py).")
