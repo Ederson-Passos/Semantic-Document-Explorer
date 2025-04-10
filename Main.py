@@ -31,5 +31,3 @@ if __name__ == "__main__":
     drive_service.cleanup_temp_folder()
     print("Processamento de todos os arquivos concluído.")
     print(f"Total de embeddings gerados: {len(all_embeddings_data)}")
-
-    # (Restante do seu main.py para o banco de dados vetorial)

@@ -1,9 +1,29 @@
 import os
+import io
 import numpy as np
 from transformers import BertTokenizer, TFBertModel
 import tensorflow as tf
+from typing import List, Dict, Optional, Any
+
+# Importação de módulos locais:
+from TextExtractor import process_and_tokenize_file, TEMP_DOWNLOAD_FOLDER
+
+# Importações relacionadas ao GoogleDriveAPI (necessárias para process_batch)
+from googleapiclient.http import MediaIoBaseDownload
+from googleapiclient.errors import HttpError
+
+# Define o tamanho do chunk para dividir documentos grandes antes de gerar embeddings.
+# Para obter informações específicas em pequenas passagens, DOCUMENT_CHUNK_SIZE baixo.
+# Para obter uma compreensão de seções maiores, DOCUMENT_CHUNK_SIZE alto.
+# DOCUMENT_CHUNK_SIZE determina o máximo de tokens dentro de um chunk.
+DOCUMENT_CHUNK_SIZE = 50
 
 class EmbeddingGenerator:
+    """
+    Gera embeddings de texto usando modelos Transformer (BERT) via TensorFlow.
+    Projetada para ser usada em um fluxo que baixa arquivos, extrai texto,
+    tokeniza e então gera vetores de embedding para chunks de texto.
+    """
     def __init__(self, model_name='bert-base-uncased', batch_size=32, output_dir='embeddings_tf'):
         """
         Inicializa o gerador de embeddings com o modelo TensorFlow, gerando embeddings a partir de tokens.
@@ -12,127 +32,200 @@ class EmbeddingGenerator:
             batch_size (int): O número de sequências a serem processadas por lote.
             output_dir (str): O diretório onde os vetores de embedding serão salvos.
         """
+        print(f"[Processo {os.getpid()}] Inicializando EmbeddingGenerator com modelo: {model_name}")
+
+        # Carrega o tokenizador específico do modelo BERT
         self.tokenizer = BertTokenizer.from_pretrained(model_name)
+        # Carrega o modelo BERT pré-treinado
         self.model = TFBertModel.from_pretrained(model_name)
-        self.batch_size = batch_size
+        # self.batch_size = batch_size
+        # Diretório para salvar os embeddings gerados
         self.output_dir = output_dir
+        # Cria o diretório de saída se ele não existir
         os.makedirs(self.output_dir, exist_ok=True)
 
         # Verifica se a GPU está disponível e a usa, caso contrário usa a CPU
         if tf.config.list_physical_devices('GPU'):
-            print("GPU encontrada, usando para geração de embeddings.")
+            print(f"[Processo {os.getpid()}] GPU encontrada. Usando GPU para geração de embeddings.")
             self.device = '/GPU:0'
         else:
-            print("Nenhuma GPU encontrada, usando CPU para geração de embeddings.")
+            print(f"[Processo {os.getpid()}] Nenhuma GPU encontrada. Usando CPU para geração de embeddings.")
             self.device = '/CPU:0'
 
-    def generate_embeddings(self, tokens_list, filename_prefix="document"):
+        print(f"[Processo {os.getpid()}] EmbeddingGenerator inicializado.")
+
+    def generate_embeddings(self, token_chunk: List[str], filename_prefix: str = "document_chunk") -> Optional[str]:
         """
-        Gera embeddings para uma lista de tokens, processando-os em lotes usando TensorFlow e a device configurada.
+        Gera embeddings para um único chunk (lista) de tokens usando o modelo BERT.
         Args:
-            tokens_list (list): Uma lista de tokens.
-            filename_prefix (str): Prefixo para o nome do arquivo onde os embeddings serão salvos.
+            token_chunk (List[str]): Uma lista de tokens representando um segmento do documento.
+            filename_prefix (str): Prefixo para o nome do arquivo .npy onde os embeddings serão salvos.
         Returns:
-            str: O caminho para o arquivo onde os embeddings foram salvos.
+            Optional[str]: O caminho para o arquivo onde os embeddings foram salvos.
         """
-        all_embeddings = []
-        for i in range(0, len(tokens_list), self.batch_size):
-            batch_tokens = tokens_list[i:i + self.batch_size]
+        if not token_chunk:
+            print(f"[Processo {os.getpid()}] Aviso: Recebido chunk de tokens vazio para '{filename_prefix}'. Pulando.")
+            return None
 
-            # Adiciona os tokens especiais [CLS] no início e [SEP] no final de cada sequência
-            batch_tokens_with_special_tokens = ['[CLS]'] + batch_tokens + ['[SEP]']
+        # Adiciona os tokens especiais [CLS] no início e [SEP] no final.
+        tokens_with_special = ['[CLS]'] + token_chunk + ['[SEP]']
 
-            # Tokeniza e converte os tokens para IDs
-            inputs = self.tokenizer(batch_tokens_with_special_tokens,
-                                    return_tensors="tf",
-                                    padding=True,
-                                    truncation=True,
-                                    max_length=512)
+        try:
+            # Converte a lista de tokens em IDs de input que o modelo entende.
+            inputs = self.tokenizer(tokens_with_special,
+                                    return_tensors="tf", # Retorna tensores do TensorFlow
+                                    padding=True, # Preenche sequências mais curtas no lote
+                                    truncation=True, # Trunca sequências mais longas que max_length.
+                                    max_length=512, # Limite comum para o modelo.
+                                    is_split_into_words=True)
 
-            # Envolve a inferência do modelo no contexto do dispositivo.
+            # Executa a inferência do modelo dentro do contexto do dispositivo configurado (CPU/GPU)
             with tf.device(self.device):
+                # Passa os inputs tokenizados para o modelo.
                 outputs = self.model(**inputs, output_hidden_states=True)
-                # O último hidden state é uma sequência de vetores para cada token.
-                # Pega a representação do token [CLS] como a representação da sequência.
-                embeddings = outputs.hidden_states[-1][:, 0, :].numpy() # (batch_size, embedding_dimension)
-            all_embeddings.extend(embeddings)
 
-        output_filename = os.path.join(self.output_dir, f"{filename_prefix}_embeddings.npy")
-        np.save(output_filename, np.array(all_embeddings))
-        print(f"Embeddings para '{filename_prefix}' salvos em: {output_filename}")
-        return output_filename
+                # Pega o embedding do primeiro token ([CLS]) como representação do chunk inteiro.
+                cls_embedding = outputs.hidden_states[-1][:, 0, :].numpy()
 
-    def process_batch(self, batch_files):
+            # Define o nome do arquivo de saída para o embedding deste chunk
+            output_filename = os.path.join(self.output_dir, f"{filename_prefix}_embedding.npy")
+            # Salva o embedding (que é um array numpy) no arquivo .npy
+            np.save(output_filename, cls_embedding)
+            print(f"[Processo {os.getpid()}] Embedding para '{filename_prefix}' salvo em: {output_filename}")
+            return output_filename
+
+        except Exception as e:
+            print(f"[Processo {os.getpid()}] Erro ao gerar embedding para '{filename_prefix}': {e}")
+            import traceback
+            print(traceback.format_exc())
+            return None
+
+    def process_batch(self, batch_files: List[Dict[str, str]]) -> List[Dict[str, Any]]:
         """
-        Processa um lote de arquivos, extrai texto, tokeniza e gera embeddings.
-        É executada para cada processo no pool de multiprocessamento.
+        Processa um lote (batch) de arquivos, extrai texto, tokeniza, divide em chunks e gera embeddings.
+        É executada para cada processo filho no pool de multiprocessamento.
+        Args:
+            batch_files (List[Dict[str, str]]): Uma lista de dicionários, onde cada dicionário
+                                                contém 'id' e 'name' de um arquivo.
+         Returns:
+            List[Dict[str, Any]]: Uma lista de dicionários, cada um contendo informações
+                                  sobre um embedding de chunk gerado
         """
         from Authentication import GoogleDriveAPI
-        from TextExtractor import process_and_tokenize_file, TEMP_DOWNLOAD_FOLDER
-        import os
-        import io
-        from googleapiclient.http import MediaIoBaseDownload
-        from googleapiclient.errors import HttpError
-        import multiprocessing as mp
+        # Obtém o ID do processo atual para logging
+        pid = os.getpid()
+        print(f"[Processo {pid}] Iniciando processamento de lote com {len(batch_files)} arquivos.")
 
-        CHUNK_SIZE = 310
-        drive_api = GoogleDriveAPI()
-        embeddings_data = []
+        # Cria uma instância da API do Google Drive DENTRO do processo filho.
+        try:
+            drive_api = GoogleDriveAPI()
+            drive_service = drive_api.service
+            if not drive_service:
+                print(f"[Processo {pid}] Erro: Falha ao inicializar o serviço do Google Drive.")
+                return [] # Retorna lista vazia se a autenticação falhar
+        except Exception as auth_error:
+            print(f"[Processo {pid}] Erro crítico ao autenticar Google Drive API: {auth_error}")
+            return []
 
-        # A instância de EmbeddingGenerator é criada dentro desta função para cada processo filho.
-        embedding_generator = EmbeddingGenerator()
+        embeddings_data = [] # Lista para armazenar os resultados do lote
 
+        # Itera sobre cada arquivo no lote atribuído ao processo
         for file_info in batch_files:
             file_id = file_info.get('id')
             file_name = file_info.get('name')
 
+            # Valida as informações do arquivo
             if not file_id or not file_name:
-                print(f"[Processo {mp.current_process().pid}] Informação de arquivo inválida: {file_info}")
+                print(f"[Processo {pid}] Informação de arquivo inválida encontrada: {file_info}. Pulando.")
                 continue
 
-            download_path = os.path.join(TEMP_DOWNLOAD_FOLDER, file_name)
+            # Caminho local onde o arquivo será baixado temporariamente
+            download_path = os.path.join(TEMP_DOWNLOAD_FOLDER, f"{pid}_{file_name}")
 
-            print(f"[Processo {mp.current_process().pid}] Iniciando tentativa de download do arquivo '{file_name}' (ID: {file_id}).")
+            print(f"[Processo {pid}] Tentando baixar '{file_name}' (ID: {file_id}) para '{download_path}'")
             try:
-                request = drive_api.service.files().get_media(fileId=file_id)
+                # Prepara a requisição para baixar o conteúdo do arquivo
+                request = drive_service.files().get_media(fileId=file_id)
+                # Usa um buffer em memória para receber os dados do download
                 fh = io.BytesIO()
+                # Cria o objeto downloader
                 downloader = MediaIoBaseDownload(fh, request)
+
                 done = False
                 while not done:
+                    # Baixa o próximo chunk do arquivo
                     status, done = downloader.next_chunk()
                     if status:
-                        print(f"[Processo {mp.current_process().pid}] Download '{file_name}': {int(status.progress() * 100)}%...", end='')
-                print(f"[Processo {mp.current_process().pid}] Download de '{file_name}' concluído.")
+                        # Exibe o progresso do download
+                        print(f"\r[Processo {pid}] Baixando '{file_name}': {int(status.progress() * 100)}%...", end='')
+                print(f"\r[Processo {pid}] Download de '{file_name}' concluído.")
+
+                # Escreve o conteúdo baixado (do buffer em memória) para o arquivo local
                 with open(download_path, "wb") as f:
                     f.write(fh.getvalue())
+                print(f"[Processo {pid}] Arquivo '{file_name}' salvo em '{download_path}'.")
 
-                print(f"[Processo {mp.current_process().pid}] Arquivo '{file_name}' baixado para '{download_path}'.")
-                _, tokens = process_and_tokenize_file(download_path)
+                # Processamento do arquivo baixado
+                print(f"[Processo {pid}] Processando e tokenizando '{file_name}'...")
+                # Extrai texto e tokeniza usando a função do TextExtractor
+                processed_filename, tokens = process_and_tokenize_file(download_path)
 
                 if tokens:
-                    num_chunks = (len(tokens) + CHUNK_SIZE - 1) // CHUNK_SIZE
+                    print(f"[Processo {pid}] Texto extraído e tokenizado de '{processed_filename}'"
+                          f"({len(tokens)} tokens). Dividindo em chunks...")
+                    # Calcula o número de chunks necessários com base no tamanho definido
+                    num_chunks = (len(tokens) + DOCUMENT_CHUNK_SIZE - 1) // DOCUMENT_CHUNK_SIZE
+
+                    # Processa cada chunk do documento
                     for i in range(num_chunks):
-                        start_index = i * CHUNK_SIZE
-                        end_index = min((i + 1) * CHUNK_SIZE, len(tokens))
+                        # Define os índices de início e fim para o chunk atual
+                        start_index = i * DOCUMENT_CHUNK_SIZE
+                        end_index = min((i + 1) * DOCUMENT_CHUNK_SIZE, len(tokens))
+                        # Extrai os tokens para o chunk atual
                         chunk_tokens = tokens[start_index:end_index]
+
                         if chunk_tokens:
-                            embedding_filename = f"{os.path.splitext(file_name)[0]}_part_{i}"
-                            # Chama o método generate_embeddings da instância LOCAL.
-                            embedding_path = embedding_generator.generate_embeddings(chunk_tokens, embedding_filename)
-                            embeddings_data.append({
-                                "filename": file_name,
-                                "chunk_id": i,
-                                "embedding_path": embedding_path
-                            })
-                if os.path.exists(download_path):
-                    os.remove(download_path)
-                    print(f"[Processo {mp.current_process().pid}] Arquivo temporário '{download_path}' removido.")
+                            # Cria um prefixo de nome de arquivo único para o embedding deste chunk
+                            embedding_filename_prefix = f"{os.path.splitext(file_name)[0]}_part_{i}"
+                            print(f"[Processo {pid}] Gerando embedding para '{file_name}' chunk {i+1}/{num_chunks}...")
+
+                            # Chama o método generate_embeddings para gerar o embedding para o chunk específico.
+                            embedding_path = self.generate_embeddings(chunk_tokens, embedding_filename_prefix)
+
+                            # Se o embedding foi gerado com sucesso, adiciona seus metadados à lista de resultados
+                            if embedding_path:
+                                embeddings_data.append({
+                                    "filename": file_name,
+                                    "chunk_id": i,
+                                    "embedding_path": embedding_path
+                                })
+                        else:
+                            print(f"[Processo {pid}] Aviso: Chunk {i} de '{file_name}'"
+                            f"está vazio após slicing. Pulando.")
                 else:
-                    print(f"[Processo {mp.current_process().pid}] Arquivo temporário '{download_path}' não encontrado e não pôde ser removido.")
+                    # Caso não seja possível extrair texto
+                    print(f"[Processo {pid}] Não foi possível extrair/tokenizar texto de '{file_name}'.")
 
+            # Tratamento de erros específicos
             except HttpError as error:
-                print(f"[Processo {mp.current_process().pid}] Erro ao baixar o arquivo '{file_name}' (ID: {file_id}): {error}")
+                print(f"[Processo {pid}] Erro de API do Google ao processar '{file_name}' (ID: {file_id}): {error}")
+            except FileNotFoundError:
+                print(f"[Processo {pid}] Erro: Arquivo tempor{download_path}' não encontrado durante processamento.")
             except Exception as e:
-                print(f"[Processo {mp.current_process().pid}] Erro inesperado ao processar o arquivo '{file_name}' (ID: {file_id}): {e}")
+                print(f"[Processo {pid}] Erro inesperado ao processar '{file_name}' (ID: {file_id}): {e}")
+                import traceback
+                print(traceback.format_exc())
 
+            # Limpeza do arquivo temporário
+            finally:
+                # Será sempre executado, garantindo a tentativa de remoção do arquivo.
+                if os.path.exists(download_path):
+                    try:
+                        os.remove(download_path)
+                        print(f"[Processo {pid}] Arquivo temporário '{download_path}' removido.")
+                    except Exception as e:
+                        print(f"[Processo {pid}] Erro ao tentar remover o arquivo temporário '{download_path}': {e}")
+
+        # Retorna a lista de metadados dos embeddings gerados neste lote
+        print(f"[Processo {pid}] Finalizado processamento do lote. {len(embeddings_data)} embeddings gerados.")
         return embeddings_data

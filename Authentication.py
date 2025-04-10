@@ -5,8 +5,6 @@ from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 
-from DataBaseManager import DataBaseManager
-
 # Define os escopos de permissão necessários para acessar o Google Drive.
 SCOPES = ["https://www.googleapis.com/auth/drive"]
 # Nome do arquivo que contém as credenciais da API do Google Cloud (OAuth 2.0 client ID).
