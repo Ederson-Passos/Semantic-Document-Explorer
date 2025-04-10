@@ -3,6 +3,7 @@ import io
 import os
 from typing import List
 
+from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from googleapiclient.http import MediaIoBaseDownload
 
@@ -142,50 +143,50 @@ class DataBaseManager:
             print(f"\n Erro inesperado durante o download (ID: {file_id}): {e}")
             return False
 
-    def process_and_embed_all_files_recursively(self, folder_id: str) -> dict:
-        """
-        Lista todos os arquivos recursivamente, baixa, extrai o texto, tokeniza e gera embeddings para
-        o conteúdo de cada arquivo usando TensorFlow.
-        Args:
-            folder_id (str): O ID da pasta a ser processada.
-        Returns:
-            dict: Um dicionário onde as chaves são os nomes dos arquivos e os valores são os caminhos para
-            os arquivos de embedding correspondentes.
-        """
-        all_files = self.list_files_recursively(folder_id)
-        embedding_paths = {}
-        embedding_generator = EmbeddingGenerator()
-
-        for file_info in all_files:
-            file_id = file_info.get('id')
-            file_name = file_info.get('name')
-
-            if not file_id or not file_name:
-                print(f"Informação de arquivo inválida: {file_info}")
-                continue
-
-            download_path = os.path.join(DOWNLOAD_FOLDER, file_name)
-            if self.download_file(file_id, file_name, DOWNLOAD_FOLDER):
-                _, tokens = process_and_tokenize_file(download_path)
-                if tokens:
-                    # Processa os tokens em partes gerenciáveis (chunks de 510 tokens, deixando
-                    # espaço para [CLS] e [SEP]) e gera embeddings para cada parte.
-                    chunk_size = 510
-                    num_chunks = (len(tokens) + chunk_size - 1) // chunk_size # Descarta o resto da divisão
-                    all_chunk_embeddings_paths = []
-
-                    for i in range(num_chunks):
-                        start_index = i * chunk_size
-                        end_index = min((i + 1) * chunk_size, len(tokens))
-                        chunk_tokens = tokens[start_index:end_index]
-                        if chunk_tokens:
-                            embedding_filename = f"{os.path.splitext(file_name)[0]}_part_{i}"
-                            embedding_path = embedding_generator.generate_embeddings(chunk_tokens, embedding_filename)
-                            all_chunk_embeddings_paths.append(embedding_path)
-
-                    embedding_paths[file_name] = all_chunk_embeddings_paths
-                os.remove(download_path) # Limpa o arquivo baixado após o processamento
-        return embedding_paths
+    # def process_and_embed_all_files_recursively(self, folder_id: str) -> dict:
+    #     """
+    #     Lista todos os arquivos recursivamente, baixa, extrai o texto, tokeniza e gera embeddings para
+    #     o conteúdo de cada arquivo usando TensorFlow.
+    #     Args:
+    #         folder_id (str): O ID da pasta a ser processada.
+    #     Returns:
+    #         dict: Um dicionário onde as chaves são os nomes dos arquivos e os valores são os caminhos para
+    #         os arquivos de embedding correspondentes.
+    #     """
+    #     all_files = self.list_files_recursively(folder_id)
+    #     embedding_paths = {}
+    #     embedding_generator = EmbeddingGenerator()
+    #
+    #     for file_info in all_files:
+    #         file_id = file_info.get('id')
+    #         file_name = file_info.get('name')
+    #
+    #         if not file_id or not file_name:
+    #             print(f"Informação de arquivo inválida: {file_info}")
+    #             continue
+    #
+    #         download_path = os.path.join(DOWNLOAD_FOLDER, file_name)
+    #         if self.download_file(file_id, file_name, DOWNLOAD_FOLDER):
+    #             _, tokens = process_and_tokenize_file(download_path)
+    #             if tokens:
+    #                 # Processa os tokens em partes gerenciáveis (chunks de 510 tokens, deixando
+    #                 # espaço para [CLS] e [SEP]) e gera embeddings para cada parte.
+    #                 chunk_size = 510
+    #                 num_chunks = (len(tokens) + chunk_size - 1) // chunk_size # Descarta o resto da divisão
+    #                 all_chunk_embeddings_paths = []
+    #
+    #                 for i in range(num_chunks):
+    #                     start_index = i * chunk_size
+    #                     end_index = min((i + 1) * chunk_size, len(tokens))
+    #                     chunk_tokens = tokens[start_index:end_index]
+    #                     if chunk_tokens:
+    #                         embedding_filename = f"{os.path.splitext(file_name)[0]}_part_{i}"
+    #                         embedding_path = embedding_generator.generate_embeddings(chunk_tokens, embedding_filename)
+    #                         all_chunk_embeddings_paths.append(embedding_path)
+    #
+    #                 embedding_paths[file_name] = all_chunk_embeddings_paths
+    #             os.remove(download_path) # Limpa o arquivo baixado após o processamento
+    #     return embedding_paths
 
     def cleanup_temp_folder(self):
         """Limpa o diretório temporário de download."""
@@ -196,5 +197,6 @@ class DataBaseManager:
                     os.unlink(file_path)
             except Exception as e:
                 print(f"Erro ao remover {file_path}: {e}")
-        os.rmdir(DOWNLOAD_FOLDER)
-        print(f"Diretório temporário '{DOWNLOAD_FOLDER}' limpo.")
+        if os.path.exists(DOWNLOAD_FOLDER):
+            os.rmdir(DOWNLOAD_FOLDER)
+            print(f"Diretório temporário '{DOWNLOAD_FOLDER}' limpo.")
