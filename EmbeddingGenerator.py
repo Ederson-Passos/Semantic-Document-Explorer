@@ -1,9 +1,6 @@
 import os
-import json
 import numpy as np
-from transformers import BertTokenizer, BertModel, TFBertModel
-import tensorflow as tf
-import tensorflow.keras as keras
+from transformers import BertTokenizer, TFBertModel
 
 class EmbeddingGenerator:
     def __init__(self, model_name='bert-base-uncased', batch_size=32, output_dir='embeddings_tf'):

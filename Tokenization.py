@@ -15,8 +15,9 @@ except LookupError:
     nltk.download('punkt_tab')
 
 def remove_special_characters(text):
-    """Remove caracteres especiais do texto."""
-    text = re.sub(r"[^a-zA-Z\s]", "", text) # Mantém apenas letras e espaços
+    """Remove caracteres especiais do texto, preservando letras (incluindo acentuadas),
+    números, espaços e sinais diacríticos comuns em inglês."""
+    text = re.sub(r"[^a-zA-Z0-9áàâãéèêíïóôõúüçñÁÀÂÃÉÈÊÍÏÓÔÕÚÜÇÑ\s\-\']", "", text)
     return text
 
 def convert_to_lowercase(text):
