@@ -2,11 +2,6 @@ import os
 import numpy as np
 from transformers import BertTokenizer, TFBertModel
 import tensorflow as tf
-import multiprocessing as mp
-
-from Authentication import GoogleDriveAPI
-from TextExtractor import process_and_tokenize_file, TEMP_DOWNLOAD_FOLDER
-
 
 class EmbeddingGenerator:
     def __init__(self, model_name='bert-base-uncased', batch_size=32, output_dir='embeddings_tf'):
@@ -72,14 +67,20 @@ class EmbeddingGenerator:
         Processa um lote de arquivos, extrai texto, tokeniza e gera embeddings.
         É executada para cada processo no pool de multiprocessamento.
         """
-        # Tamanho dos chunks de texto para gerar embeddings.
-        # Tamanho é diretamente proporcional à precisão, à quantidade de processamento e memória utilizada.
-        CHUNK_SIZE = 510
+        from Authentication import GoogleDriveAPI
+        from TextExtractor import process_and_tokenize_file, TEMP_DOWNLOAD_FOLDER
+        import os
+        import io
+        from googleapiclient.http import MediaIoBaseDownload
+        from googleapiclient.errors import HttpError
+        import multiprocessing as mp
 
-        # Instancia a API e o gerador de embeddings para cada processo.
+        CHUNK_SIZE = 310
         drive_api = GoogleDriveAPI()
+        embeddings_data = []
+
+        # A instância de EmbeddingGenerator é criada dentro desta função para cada processo filho.
         embedding_generator = EmbeddingGenerator()
-        embeddings_data = [] # Lista para armazenar os embeddings gerados para este lote.
 
         for file_info in batch_files:
             file_id = file_info.get('id')
@@ -91,8 +92,20 @@ class EmbeddingGenerator:
 
             download_path = os.path.join(TEMP_DOWNLOAD_FOLDER, file_name)
 
-            # Utiliza o serviço autenticado para baixar o arquivo.
-            if drive_api.service.files().get_media(fileId=file_id).execute():
+            print(f"[Processo {mp.current_process().pid}] Iniciando tentativa de download do arquivo '{file_name}' (ID: {file_id}).")
+            try:
+                request = drive_api.service.files().get_media(fileId=file_id)
+                fh = io.BytesIO()
+                downloader = MediaIoBaseDownload(fh, request)
+                done = False
+                while not done:
+                    status, done = downloader.next_chunk()
+                    if status:
+                        print(f"[Processo {mp.current_process().pid}] Download '{file_name}': {int(status.progress() * 100)}%...", end='')
+                print(f"[Processo {mp.current_process().pid}] Download de '{file_name}' concluído.")
+                with open(download_path, "wb") as f:
+                    f.write(fh.getvalue())
+
                 print(f"[Processo {mp.current_process().pid}] Arquivo '{file_name}' baixado para '{download_path}'.")
                 _, tokens = process_and_tokenize_file(download_path)
 
@@ -104,16 +117,22 @@ class EmbeddingGenerator:
                         chunk_tokens = tokens[start_index:end_index]
                         if chunk_tokens:
                             embedding_filename = f"{os.path.splitext(file_name)[0]}_part_{i}"
-                            # Chama o EmbeddingGenerator para gerar os embeddings.
+                            # Chama o método generate_embeddings da instância LOCAL.
                             embedding_path = embedding_generator.generate_embeddings(chunk_tokens, embedding_filename)
                             embeddings_data.append({
                                 "filename": file_name,
                                 "chunk_id": i,
                                 "embedding_path": embedding_path
-                                # Aqui você pode adicionar mais metadados relevantes para o RAG
                             })
-                os.remove(download_path)
-                print(f"[Processo {mp.current_process().pid}] Arquivo temporário '{download_path}' removido.")
-            else:
-                print(f"[Processo {mp.current_process().pid}] Falha ao baixar o arquivo: {file_name} (ID: {file_id})")
+                if os.path.exists(download_path):
+                    os.remove(download_path)
+                    print(f"[Processo {mp.current_process().pid}] Arquivo temporário '{download_path}' removido.")
+                else:
+                    print(f"[Processo {mp.current_process().pid}] Arquivo temporário '{download_path}' não encontrado e não pôde ser removido.")
+
+            except HttpError as error:
+                print(f"[Processo {mp.current_process().pid}] Erro ao baixar o arquivo '{file_name}' (ID: {file_id}): {error}")
+            except Exception as e:
+                print(f"[Processo {mp.current_process().pid}] Erro inesperado ao processar o arquivo '{file_name}' (ID: {file_id}): {e}")
+
         return embeddings_data
