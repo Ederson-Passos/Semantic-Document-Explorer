@@ -2,6 +2,11 @@ import os
 import numpy as np
 from transformers import BertTokenizer, TFBertModel
 import tensorflow as tf
+import multiprocessing as mp
+
+from Authentication import GoogleDriveAPI
+from TextExtractor import process_and_tokenize_file, TEMP_DOWNLOAD_FOLDER
+
 
 class EmbeddingGenerator:
     def __init__(self, model_name='bert-base-uncased', batch_size=32, output_dir='embeddings_tf'):
@@ -61,3 +66,54 @@ class EmbeddingGenerator:
         np.save(output_filename, np.array(all_embeddings))
         print(f"Embeddings para '{filename_prefix}' salvos em: {output_filename}")
         return output_filename
+
+    def process_batch(self, batch_files):
+        """
+        Processa um lote de arquivos, extrai texto, tokeniza e gera embeddings.
+        É executada para cada processo no pool de multiprocessamento.
+        """
+        # Tamanho dos chunks de texto para gerar embeddings.
+        # Tamanho é diretamente proporcional à precisão, à quantidade de processamento e memória utilizada.
+        CHUNK_SIZE = 510
+
+        # Instancia a API e o gerador de embeddings para cada processo.
+        drive_api = GoogleDriveAPI()
+        embedding_generator = EmbeddingGenerator()
+        embeddings_data = [] # Lista para armazenar os embeddings gerados para este lote.
+
+        for file_info in batch_files:
+            file_id = file_info.get('id')
+            file_name = file_info.get('name')
+
+            if not file_id or not file_name:
+                print(f"[Processo {mp.current_process().pid}] Informação de arquivo inválida: {file_info}")
+                continue
+
+            download_path = os.path.join(TEMP_DOWNLOAD_FOLDER, file_name)
+
+            # Utiliza o serviço autenticado para baixar o arquivo.
+            if drive_api.service.files().get_media(fileId=file_id).execute():
+                print(f"[Processo {mp.current_process().pid}] Arquivo '{file_name}' baixado para '{download_path}'.")
+                _, tokens = process_and_tokenize_file(download_path)
+
+                if tokens:
+                    num_chunks = (len(tokens) + CHUNK_SIZE - 1) // CHUNK_SIZE
+                    for i in range(num_chunks):
+                        start_index = i * CHUNK_SIZE
+                        end_index = min((i + 1) * CHUNK_SIZE, len(tokens))
+                        chunk_tokens = tokens[start_index:end_index]
+                        if chunk_tokens:
+                            embedding_filename = f"{os.path.splitext(file_name)[0]}_part_{i}"
+                            # Chama o EmbeddingGenerator para gerar os embeddings.
+                            embedding_path = embedding_generator.generate_embeddings(chunk_tokens, embedding_filename)
+                            embeddings_data.append({
+                                "filename": file_name,
+                                "chunk_id": i,
+                                "embedding_path": embedding_path
+                                # Aqui você pode adicionar mais metadados relevantes para o RAG
+                            })
+                os.remove(download_path)
+                print(f"[Processo {mp.current_process().pid}] Arquivo temporário '{download_path}' removido.")
+            else:
+                print(f"[Processo {mp.current_process().pid}] Falha ao baixar o arquivo: {file_name} (ID: {file_id})")
+        return embeddings_data
