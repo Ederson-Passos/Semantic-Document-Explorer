@@ -3,7 +3,7 @@ from Authentication import GoogleDriveAPI
 from DataBaseManager import DataBaseManager
 from EmbeddingGenerator import EmbeddingGenerator
 
-TARGET_FOLDER_ID = "1PHm4UTj7HRnD1580FL6Q8OWQDelscpVj"
+TARGET_FOLDER_ID = "1yAEcnT_ecmPpjgkBSUeocA86tBP5D4rb"
 BATCH_SIZE = 4
 NUM_PROCESSES = mp.cpu_count()
 
