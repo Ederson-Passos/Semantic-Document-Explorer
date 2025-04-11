@@ -16,7 +16,7 @@ from googleapiclient.errors import HttpError
 # Para obter informações específicas em pequenas passagens, DOCUMENT_CHUNK_SIZE baixo.
 # Para obter uma compreensão de seções maiores, DOCUMENT_CHUNK_SIZE alto.
 # DOCUMENT_CHUNK_SIZE determina o máximo de tokens dentro de um chunk.
-DOCUMENT_CHUNK_SIZE = 510
+DOCUMENT_CHUNK_SIZE = 50
 
 class EmbeddingGenerator:
     """
@@ -24,11 +24,13 @@ class EmbeddingGenerator:
     Projetada para ser usada em um fluxo que baixa arquivos, extrai texto,
     tokeniza e então gera vetores de embedding para chunks de texto.
     """
-    def __init__(self, model_name='bert-base-uncased'):
+    def __init__(self, model_name='bert-base-uncased', batch_size=32, output_dir='embeddings_tf'):
         """
         Inicializa o gerador de embeddings com o modelo TensorFlow, gerando embeddings a partir de tokens.
         Args:
             model_name (str): O nome do modelo Transformer pré-treinado a ser usado.
+            batch_size (int): O número de sequências a serem processadas por lote.
+            output_dir (str): O diretório onde os vetores de embedding serão salvos.
         """
         print(f"[Processo {os.getpid()}] Inicializando EmbeddingGenerator com modelo: {model_name}")
 
@@ -36,6 +38,11 @@ class EmbeddingGenerator:
         self.tokenizer = BertTokenizer.from_pretrained(model_name)
         # Carrega o modelo BERT pré-treinado
         self.model = TFBertModel.from_pretrained(model_name)
+        # self.batch_size = batch_size
+        # Diretório para salvar os embeddings gerados
+        self.output_dir = output_dir
+        # Cria o diretório de saída se ele não existir
+        os.makedirs(self.output_dir, exist_ok=True)
 
         # Verifica se a GPU está disponível e a usa, caso contrário usa a CPU
         if tf.config.list_physical_devices('GPU'):
@@ -47,16 +54,17 @@ class EmbeddingGenerator:
 
         print(f"[Processo {os.getpid()}] EmbeddingGenerator inicializado.")
 
-    def generate_embedding(self, token_chunk: List[str]) -> Optional[np.ndarray]:
+    def generate_embeddings(self, token_chunk: List[str], filename_prefix: str = "document_chunk") -> Optional[str]:
         """
         Gera embeddings para um único chunk (lista) de tokens usando o modelo BERT.
         Args:
             token_chunk (List[str]): Uma lista de tokens representando um segmento do documento.
+            filename_prefix (str): Prefixo para o nome do arquivo .npy onde os embeddings serão salvos.
         Returns:
-            Optional[np.ndarray]: O vetor de embedding para o chunk, ou None em caso de erro.
+            Optional[str]: O caminho para o arquivo onde os embeddings foram salvos.
         """
         if not token_chunk:
-            print(f"[Processo {os.getpid()}] Aviso: Recebido chunk de tokens vazio. Pulando.")
+            print(f"[Processo {os.getpid()}] Aviso: Recebido chunk de tokens vazio para '{filename_prefix}'. Pulando.")
             return None
 
         # Adiciona os tokens especiais [CLS] no início e [SEP] no final.
@@ -78,10 +86,16 @@ class EmbeddingGenerator:
 
                 # Pega o embedding do primeiro token ([CLS]) como representação do chunk inteiro.
                 cls_embedding = outputs.hidden_states[-1][:, 0, :].numpy()
-            return cls_embedding
+
+            # Define o nome do arquivo de saída para o embedding deste chunk
+            output_filename = os.path.join(self.output_dir, f"{filename_prefix}_embedding.npy")
+            # Salva o embedding (que é um array numpy) no arquivo .npy
+            np.save(output_filename, cls_embedding)
+            print(f"[Processo {os.getpid()}] Embedding para '{filename_prefix}' salvo em: {output_filename}")
+            return output_filename
 
         except Exception as e:
-            print(f"[Processo {os.getpid()}] Erro ao gerar embedding: {e}")
+            print(f"[Processo {os.getpid()}] Erro ao gerar embedding para '{filename_prefix}': {e}")
             import traceback
             print(traceback.format_exc())
             return None
@@ -95,14 +109,14 @@ class EmbeddingGenerator:
                                                 contém 'id' e 'name' de um arquivo.
          Returns:
             List[Dict[str, Any]]: Uma lista de dicionários, cada um contendo informações
-                                  sobre um embedding de chunk gerado (embedding e metadados).
+                                  sobre um embedding de chunk gerado
         """
         from Authentication import GoogleDriveAPI
         # Obtém o ID do processo atual para logging
         pid = os.getpid()
         print(f"[Processo {pid}] Iniciando processamento de lote com {len(batch_files)} arquivos.")
 
-        # Cria uma instância da API do Google Drive dentro do processo filho.
+        # Cria uma instância da API do Google Drive DENTRO do processo filho.
         try:
             drive_api = GoogleDriveAPI()
             drive_service = drive_api.service
@@ -176,18 +190,18 @@ class EmbeddingGenerator:
                             print(f"[Processo {pid}] Gerando embedding para '{file_name}' chunk {i+1}/{num_chunks}...")
 
                             # Chama o método generate_embeddings para gerar o embedding para o chunk específico.
-                            embedding_vector = self.generate_embeddings(chunk_tokens)
+                            embedding_path = self.generate_embeddings(chunk_tokens, embedding_filename_prefix)
 
                             # Se o embedding foi gerado com sucesso, adiciona seus metadados à lista de resultados
-                            if embedding_vector is not None:
+                            if embedding_path:
                                 embeddings_data.append({
                                     "filename": file_name,
                                     "chunk_id": i,
-                                    "embedding_path": embedding_vector.tolist() # Converte para list para serialização.
+                                    "embedding_path": embedding_path
                                 })
                         else:
                             print(f"[Processo {pid}] Aviso: Chunk {i} de '{file_name}'"
-                            f"está vazio após slicing. Pulando.")
+                                  f"está vazio após slicing. Pulando.")
                 else:
                     # Caso não seja possível extrair texto
                     print(f"[Processo {pid}] Não foi possível extrair/tokenizar texto de '{file_name}'.")
