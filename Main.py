@@ -75,7 +75,19 @@ if __name__ == "__main__":
                             query_embedding = first_embedding.reshape(1, -1)
                             k = 3
                             distances, indices = faiss_index.search(query_embedding, top_k=k)
-                            # ... (código para imprimir resultados da busca) ...
+                            print(f"\nResultados da busca para o embedding de exemplo (top {k}):")
+                            for i in range(k):
+                                if indices[0][i] < len(all_embeddings_data):
+                                    result_data = all_embeddings_data[indices[0][i]]
+                                    print(f"  - Resultado {i + 1}:")
+                                    print(f"    - Distância: {distances[0][i]}")
+                                    print(f"    - Nome do Arquivo: {result_data.get('file_name', 'Nome não disponível')}")
+                                    print(f"    - ID do Arquivo: {result_data.get('file_id', 'ID não disponível')}")
+                                    print(f"    - Caminho do Embedding: {result_data.get('embedding_path','Caminho não disponível')}")
+                                    if not all(key in result_data for key in ['file_name', 'file_id', 'embedding_path']):
+                                        print(f"    - Dados incompletos: {result_data}")
+                                else:
+                                    print(f"  - Resultado {i + 1}: Índice fora dos limites dos dados de embedding.")
                         else:
                             print("Aviso: Nenhum embedding disponível para teste de busca.")
                     except Exception as e:
@@ -93,5 +105,3 @@ if __name__ == "__main__":
             print(f"Ocorreu um erro ao inicializar ou carregar os embeddings: {e}")
     else:
         print("Nenhum embedding gerado. Impossível construir o índice Faiss.")
-
-    print("Etapa 4: Construção do índice Faiss concluída.")
