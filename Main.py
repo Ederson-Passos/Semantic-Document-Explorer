@@ -1,3 +1,8 @@
+import tensorflow as tf
+
+tf.config.threading.set_intra_op_parallelism_threads(4)  # Tente com um número baixo de threads
+tf.config.threading.set_inter_op_parallelism_threads(2)  # Tente com um número baixo de threadspip
+
 from pathlib import Path
 
 import numpy as np
