@@ -4,7 +4,7 @@ import weaviate
 from typing import List, Dict, Any, Optional
 from weaviate.exceptions import UnexpectedStatusCodeError
 from typing import List, Dict, Any, Optional, Tuple
-import datasketch # Testar MinHash, MinHashLSH
+from datasketch import MinHash, MinHashLSH
 
 
 class WeaviateIndexer:
@@ -17,6 +17,7 @@ class WeaviateIndexer:
                  class_name: str,
                  embedding_dimension: int,
                  lsh_num_perm: int = 128,
+                 lsh_threshold: int = 0.5,
                  default_properties: Optional[List[Dict[str, Any]]] = None
                  ):
         """
@@ -26,6 +27,7 @@ class WeaviateIndexer:
             class_name (str): nome da classe (tabela) a ser usada. Deve começar com letra maiúscula.
             embedding_dimension (int): dimensão dos vetores de embedding que serão indexados.
             lsh_num_perm (int): número de permutações/hiperplanos.
+            lsh_threshold (int): define o nível mínimo de similaridade de Jaccard estimado.
             default_properties (Optional[List[Dict[str, Any]]]): lista de dicionários definindo propriedades adicionais
                                                                  a serem armazenadas com cada vetor.
         """
@@ -36,11 +38,13 @@ class WeaviateIndexer:
         self.class_name = class_name
         self.embedding_dimension = embedding_dimension
         self.lsh_num_perm = lsh_num_perm
+        self.lsh_threshold = lsh_threshold
+        self.lsh = MinHashLSH(threshold=lsh_threshold, num_perm=lsh_num_perm)
         self._client_config = {'url': self.weaviate_url}
 
         # Configuração do cliente Weaviate
         try:
-            self.client = weaviate.connect_to_local(**self._client_config)
+            self.client = weaviate.WeaviateClient(**self._client_config)
             if not self.client.is_ready():
                 raise ConnectionError(f"Não foi possível conectar ou a instância Weaviate em {self.weaviate_url} não "
                                       f"está pronta.")
@@ -72,46 +76,105 @@ class WeaviateIndexer:
         # Garante que o schema (classe) exista no Weaviate.
         self._ensure_schema()
 
+    def _validate_existing_schema(self, existing_schema: Dict[str, Any], expected_properties: Dict[str, Any]):
+        """
+        Valida o schema existente com o esperado.
+        Args:
+            existing_schema: O schema existente retornado pelo Weaviate.
+            expected_properties: As propriedades esperadas.
+        Raises:
+            ValueError: Se houver incompatibilidade no schema.
+        """
+        existing_properties = {prop['name']: prop for prop in existing_schema['properties']}
+        if set(expected_properties.keys()) != set(existing_properties.keys()):
+            raise ValueError(f"Incompatibilidade no schema da classe '{self.class_name}'. "
+                             f"Propriedades esperadas: {set(expected_properties.keys())}, "
+                             f"encontradas: {set(existing_properties.keys())}.")
+
+        for prop_name, expected_prop in expected_properties.items():
+            if existing_prop := existing_properties.get(prop_name):
+                if expected_prop['dataType'] != existing_prop['dataType']:
+                    raise ValueError(f"Incompatibilidade no tipo de dados da propriedade '{prop_name}' na "
+                                     f"classe '{self.class_name}'.  Esperado: {expected_prop['dataType']}, "
+                                     f"encontrado: {existing_prop['dataType']}.")
+            else:
+                raise ValueError(f"Propriedade '{prop_name}' esperada não encontrada no schema existente da"
+                                 f" classe '{self.class_name}'.")
+
+    def _validate_vector_index_config(self, existing_schema: Dict[str, Any], expected_vector_index_config: Dict[str, Any]):
+        """
+        Valida a configuração do índice vetorial existente com o esperado.
+        Args:
+            existing_schema: O schema existente retornado pelo Weaviate.
+            expected_vector_index_config: A configuração do índice vetorial esperada.
+        Raises:
+            ValueError: Se houver incompatibilidade na configuração do índice vetorial.
+        """
+        existing_vector_index_config = existing_schema.get('vectorIndexConfig')
+
+        if not existing_vector_index_config or 'hnsw' not in existing_vector_index_config:
+            raise ValueError(f"Incompatibilidade na configuração do índice vetorial da classe "
+                             f"'{self.class_name}'. Esperado encontrar a configuração HNSW.")
+
+        for key, value in expected_vector_index_config['hnsw'].items():
+            if existing_vector_index_config['hnsw'].get(key) != value:
+                raise ValueError(f"Incompatibilidade na configuração HNSW da classe '{self.class_name}'. "
+                                 f"Esperado '{key}': {value}, encontrado: "
+                                 f"{existing_vector_index_config['hnsw'].get(key)}.")
+
     def _ensure_schema(self):
         """
         Verifica se a classe definida existe no Weaviate e a cria se necessário.
+        Valida o schema existente com o esperado e levanta um erro em caso de incompatibilidade.
         """
+        expected_properties = {prop['name']: prop for prop in self.properties}
+        expected_vector_index_config = {
+            'hnsw': {
+                'efConstruction': 128,
+                'maxConections': 32,
+                'distance': 'cossine'
+            }
+        }
+
         try:
             # Tenta obter o schema da classe
-            existing_schema = self.client.collections.get(self.class_name)
-            print(f"Schema para a classe '{self.class_name}' já existe.")
-            # Validar se o schema existente corresponde ao esperado.
-            # Implementar: (ex: verificar propriedades, configuração do vetorizador)
-            # Se houver incompatibilidade, pode ser necessário deletar e recriar
-            # ou lançar um erro mais específico.
-        except weaviate.exceptions.UnexpectedStatusCodeError as e:
-            if e.status_code == 404:  # Not Found - Classe não existe
+            existing_collection = self.client.collections.get(self.class_name)
+            if existing_collection is not None:
+                print(f"Schema para a classe '{self.class_name}' já existe. Validando...")
+
+                existing_schema = existing_collection.config.get()
+
+                # Validação do schema existente com o esperado
+                self._validate_existing_schema(existing_schema, expected_properties)
+
+                # Validação da configuração do índice vetorial
+                self._validate_vector_index_config(existing_schema, expected_vector_index_config)
+
+                print(f"Schema para a classe '{self.class_name}' validado com sucesso.")
+
+            else:
+                # Classe não existe, então é criada.
                 print(f"Schema para a classe '{self.class_name}' não encontrado. Criando...")
                 collection_schema = {
                     'name': self.class_name,
-                    'description': f"Armazena chunks de documentos com seus embeddings ({self.embedding_dimension}d) "
+                    'description': f"Armazena chunks de documentos com seus embeddings ({self.embedding_dimension}d) ) "
                                    f"e hashes LSH.",
-                    # Nós forneceremos os embeddings.
                     'vectorizer': "none",
                     'vectorIndexConfig': {
-                        'hnsw': {  # Especifica o algoritmo de indexação vetorial.
-                            # Parâmetros podem ser ajustados para performance vs custo.
-                            'efConstruction': 128,  # Qualidade da construção do índice.
-                            'maxConections': 32,  # Número máximo de conexões por nó.
-                            'distance': 'cossine'  # Comum para embeddings de texto.
-                        }
+                        'hnsw': expected_vector_index_config['hnsw']
                     },
                     'properties': self.properties
                 }
                 try:
-                    self.client.collections.create(
-                        name=self.class_name,
-                        schema=collection_schema
-                    )
+                    self.client.collections.create_from_dict(collection_schema)
                     print(f"Schema para a classe '{self.class_name}' criado com sucesso.")
                 except Exception as e:
                     print(f"Erro ao criar o schema para a classe {self.class_name}: {e}")
                     raise e
+
+        except weaviate.exceptions.UnexpectedStatusCodeError as e:
+            if e.status_code == 404:  # Not Found - Classe não existe
+                pass
             else:
                 # Outro erro inesperado ao tentar obter o schema.
                 print(f"Erro inesperado ao verificar/criar o schema '{self.class_name}': {e}")
@@ -122,4 +185,24 @@ class WeaviateIndexer:
 
     # Métodos para geração de Hash LSH
     def _generate_lsh_hash(self, embedding: np.ndarray) -> str:
-        pass
+        """
+        Gera uma chave Minhash LSH a partir de um vetor de embedding.
+        Args:
+            embedding (np.ndarray): vetor de embedding (1D array).
+        Returns:
+            str: string representando a chave Minhash LSH.
+        """
+        if embedding.ndim != 1:
+            if embedding.ndim == 2 and embedding.shape[0] ==  1:
+                embedding = embedding.flatten()
+            else:
+                raise ValueError(f"Embedding deve ser um array 1D para MinHash, mas tem shape {embedding.shape}")
+
+        m = MinHash(num_perm=self.lsh_num_perm)
+        for i in range(embedding.shape[0]):  # Itera pelo índices do embedding.
+            val = embedding[i]
+            # Adicionando o valor ao hash.
+            for _ in range(int(abs(val) * 100) + 1):  # Multiplica para ter mais granularidade.
+                m.update(str(i).encode('utf8'))
+
+        return m.digest().hex()
