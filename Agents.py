@@ -3,7 +3,7 @@ from DocumentTools import (ExtractTextTool, CountWordsTool, FileSummaryTool, Lis
                            GetFileSizeTool, CreateDirectoryTool, DeleteDirectoryTool, DeleteFileTool, MoveFileTool)
 from WebTools import (ScrapeWebsiteTool, SeleniumScrapingTool, ExtractLinksToll, ExtractPageStructureTool,
                       ClickAndScrapeTool, SimulateMouseMovementTool, SimulateScrollTool, GetElementAttributesTool,
-                      SendToGoogleAnalyticsTool)
+                      SendToGoogleAnalyticsTool, CrawlAndScrapeSiteTool)
 from ReportGeneretor import GenerateReportTool
 
 class DocumentAnalysisAgent(Agent):
@@ -267,6 +267,36 @@ class AnalyticsReportingAgent(Agent):
                 SendToGoogleAnalyticsTool(
                     name="send_to_google_analytics",
                     description="Sends data to Google Analytics."
+                )
+            ],
+            memory=True,
+            verbose=True
+        )
+
+class SiteCrawlerAgent(Agent):
+    """
+    Agente para rastrear um site inteiro, extrair conteúdo e identificar informações relevantes.
+    """
+    def __init__(self):
+        super().__init__(
+            role="Website Crawler and Content Extractor",
+            goal="Explore a website, extract content from all relevant pages, and identify key information.",
+            tools=[
+                CrawlAndScrapeSiteTool(
+                    name="crawl_and_scrape_site",
+                    description="Crawls a website and scrapes content from each page."
+                ),
+                ScrapeWebsiteTool(
+                    name="scrape_website_content",
+                    description="Scrapes the text content from a given URL."
+                ),
+                ExtractLinksToll(
+                    name = "extract_links",
+                    description = "Extract all links from a given web page."
+                ),
+                ExtractPageStructureTool(
+                    name="extract_page_structure",
+                    description="Extracts the structure of a web page."
                 )
             ],
             memory=True,
