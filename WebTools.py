@@ -10,6 +10,7 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.common.action_chains import ActionChains
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as ec
+from urllib.parse import urljoin
 
 class ScrapeWebsiteTool(BaseTool):
     """
@@ -214,3 +215,49 @@ class SendToGoogleAnalyticsTool(BaseTool):
             return f"Data sent to Google Analytics: {response.status_code}"
         except requests.exceptions.RequestException as e:
             return f"Error sending data to Google Analytics: {e}"
+
+class CrawlAndScrapeSiteTool(BaseTool):
+    """
+    Realiza varredura em um website, extraindo links e conteúdo de cada página do mesmo.
+    """
+    name = "crawl_and_scrape_site"
+    description = "Crawls a website, extracts links, and scrapes content from each page.  Be cautious with this tool to avoid overloading the server."
+
+    def _run(self, base_url: str, max_pages: int = 10) -> dict:
+        crawled_data = {}
+        to_crawl = [base_url]
+        crawled = set()
+        page_count = 0
+
+        while to_crawl and page_count < max_pages:
+            url = to_crawl.pop(0)
+            if url in crawled:
+                continue
+
+            try:
+                print(f"Crawling: {url}")
+                response = requests.get(url, timeout=10)
+                response.raise_for_status()
+                soup = BeautifulSoup(response.text, 'html.parser')
+
+                # Extrair conteúdo principal.
+                # Precisa de ajuste conforme a estrutura do site.
+                main_content = soup.find('body').text.strip()  # Exemplo: pega o texto do <body>
+                crawled_data[url] = {"content": main_content}
+
+                # Extrair links e adionar à fila.
+                links = [urljoin(url, a.get('href')) for a in soup.find_all('a', href=True)]
+                for link in links:
+                    if link.startswith(base_url) and link not in crawled and link not in to_crawl:
+                        to_crawl.append(link)
+
+                crawled.add(url)
+                page_count += 1
+                time.sleep(1)  # Respeitar o servidor (delay de 1 segundo)
+
+            except requests.exceptions.RequestException as e:
+                crawled_data[url] = {"error": str(e)}
+            except Exception as e:
+                crawled_data[url] = {"error": f"General error: {e}"}
+
+        return crawled_data
