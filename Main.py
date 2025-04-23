@@ -11,7 +11,7 @@ import numpy as np
 from Authentication import GoogleDriveAPI
 from DataBaseManager import DataBaseManager
 from EmbeddingGenerator import EmbeddingGenerator
-from FaissIndexer import FaissIndexer
+from WeaviateIndexer import FaissIndexer
 from FolderManager import check_directory_existence
 
 # Definição de constantes

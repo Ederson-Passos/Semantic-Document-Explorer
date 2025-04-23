@@ -206,3 +206,12 @@ class WeaviateIndexer:
                 m.update(str(i).encode('utf8'))
 
         return m.digest().hex()
+
+    def add_batch_embeddings(self, embeddings_data: List[Dict[str, Any]], batch_size: int = 100):
+        """
+        Adiciona um lote de embeddings e seus metadados ao Weaviate, incluindo a geração e indexação de hashes LSH.
+        Args:
+            embeddings_data (List[Dict[str, Any]]):
+            batch_size:
+        """
+        pass
