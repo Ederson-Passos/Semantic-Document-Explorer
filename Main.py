@@ -15,7 +15,7 @@ from FaissIndexer import FaissIndexer
 from FolderManager import check_directory_existence
 
 # Definição de constantes
-TARGET_FOLDER_ID = "1m9YNYM1WHgYWHqXmow0LCkIsuXFzfTNg"
+TARGET_FOLDER_ID = "1lXQ7R5z8NGV1YGUncVDHntiOFX35r6WO"
 TEMP_DOWNLOAD_FOLDER = 'temp_download'
 BATCH_SIZE = 4
 EMBEDDING_OUTPUT_DIR = 'embeddings_tf'
