@@ -5,8 +5,8 @@ import os
 from crewai.tools import BaseTool
 
 class GenerateReportTool(BaseTool):
-    name = "generate_report"
-    description = "Generates a report summarizing the key findings from the document analysis."
+    name: str = "generate_report"
+    description: str = "Generates a report summarizing the key findings from the document analysis."
 
     def _run(self, analysis_results:  dict, report_directory: str = "reports") -> str:
         """

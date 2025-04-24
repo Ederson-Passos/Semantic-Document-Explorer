@@ -1,107 +1,62 @@
-import tensorflow as tf
+import asyncio
+from crewai import Crew, Process, Task
+from Agents import WebScrapingAgent, AdvancedWebResearchAgent, ReportingAgent
+from ReportGeneretor import GenerateReportTool
+from WebTools import CrawlAndScrapeSiteTool, ExtractPageStructureTool
+import datetime
+import os
 
-tf.config.threading.set_intra_op_parallelism_threads(4)
-tf.config.threading.set_inter_op_parallelism_threads(2)
+SITE_URL = "https://www.loc.gov/"
+REPORT_DIR = "web_reports"
+os.makedirs(REPORT_DIR, exist_ok=True)
 
-from pathlib import Path
+async def main():
+    web_scraper_agent = WebScrapingAgent()
+    advanced_research_agent = AdvancedWebResearchAgent()
+    reporting_agent = ReportingAgent()
 
-import numpy as np
+    crew = Crew(
+        agents=[web_scraper_agent, advanced_research_agent, reporting_agent],
+        tasks=[
+            # Tarefa 1: rastrear o site e extrair informações básicas
+            Task(
+                agent=advanced_research_agent,
+                description=f"Crawl the website {SITE_URL} and extract all the content.",
+                tools=CrawlAndScrapeSiteTool(name="crawl_and_scrape")
+                # input={"base_url": SITE_URL}
+            ),
+            # Tarefa 2: analisar a estrutura do site.
+            Task(
+                agent=advanced_research_agent,
+                description="Analyze the structure of the website.",
+                tools=ExtractPageStructureTool(
+                    name="extract_structure",
+                    description="Extracts the structure of a web page."
+                )
+                # input={"url": SITE_URL}
+            ),
+            # Tarefa 3: gerar um relatório detalhado.
+            Task(
+                agent=reporting_agent,
+                description="Generate a detailed report on the website's content and structure.",
+                tools=GenerateReportTool(
+                    name="generate_report",
+                    description="Generates a report summarizing the key findings from the document analysis."
+                )
+                # input={"data":  # Aqui você precisará passar os dados coletados nas tarefas anteriores}
+            ),
+        ],
+        process=Process.sequential
+    )
 
-# Importação dos arquivos existentes
-from Authentication import GoogleDriveAPI
-from DataBaseManager import DataBaseManager
-from EmbeddingGenerator import EmbeddingGenerator
-from WeaviateIndexer import FaissIndexer
-from FolderManager import check_directory_existence
+    report = crew.kickoff()
 
-# Definição de constantes
-TARGET_FOLDER_ID = "1m9YNYM1WHgYWHqXmow0LCkIsuXFzfTNg"
-TEMP_DOWNLOAD_FOLDER = 'temp_download'
-BATCH_SIZE = 4
-EMBEDDING_OUTPUT_DIR = 'embeddings_tf'
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    report_file = os.path.join(REPORT_DIR, f"web_report_{timestamp}.txt")
+    with open(report_file, "w", encoding="utf-8") as f:
+        f.write(report)
 
-temp_dir = Path(TEMP_DOWNLOAD_FOLDER)
-
-check_directory_existence(temp_dir)
-
+    print(f"Relatório salvo em: {report_file}")
 
 if __name__ == "__main__":
-    drive_api = GoogleDriveAPI()
-    drive_service = DataBaseManager(drive_api.service)
-
-    print(f"\n=== Iniciando Listagem Recursiva a partir da Pasta ID: {TARGET_FOLDER_ID} ===")
-    all_files_recursive = drive_service.list_files_recursively(folder_id=TARGET_FOLDER_ID)
-    print(f"Total de arquivos a processar: {len(all_files_recursive)}")
-
-    # Percorrer all_files_recursive em passos de tamanho BATCH_SIZE. Em cada passo, copia uma fatia em uma nova
-    # sublista, sendo salva em file_batches.
-    file_batches = [all_files_recursive[i:i + BATCH_SIZE] for i in range(0, len(all_files_recursive), BATCH_SIZE)]
-
-    embedding_generator_instance = EmbeddingGenerator()
-    all_embeddings_data = []
-    for batch in file_batches:
-        batch_result = embedding_generator_instance.process_batch(batch)
-        all_embeddings_data.extend(batch_result)
-
-    drive_service.cleanup_temp_folder()
-    print("Processamento de todos os arquivos concluído.")
-    print(f"Total de embeddings gerados: {len(all_embeddings_data)}")
-
-    # Construção do índice Faiss
-    print("\n=== Iniciando a construção do índice ===")
-
-    if all_embeddings_data:
-        # Supondo que todos os embeddings tenham a mesma dimensão, pegamos do primeiro.
-        # É importante garantir que isso seja verdade no seu fluxo de trabalho.
-        try:
-            first_embedding_path = all_embeddings_data[0]['embedding_path']
-            first_embedding = np.load(first_embedding_path)
-            print(f"first_embedding = {first_embedding.shape}")
-            embedding_dimension = first_embedding.shape[1]
-
-            faiss_index = FaissIndexer(embedding_dimension)
-
-            if faiss_index.load_and_add_embeddings(all_embeddings_data):
-                faiss_index.save_index()
-                print("Construção do índice Faiss concluída e salva.")
-
-                # --- Exemplo de como carregar e usar o índice para busca (para teste) ---
-                print("\n=== Testando a Busca no Índice Faiss (Exemplo) ===")
-                if faiss_index.index is not None:
-                    try:
-                        if all_embeddings_data:
-                            first_embedding_path = all_embeddings_data[0]['embedding_path']
-                            first_embedding = np.load(first_embedding_path)
-                            query_embedding = first_embedding.reshape(1, -1)
-                            k = 3
-                            distances, indices = faiss_index.search(query_embedding, top_k=k)
-                            print(f"\nResultados da busca para o embedding de exemplo (top {k}):")
-                            for i in range(k):
-                                if indices[0][i] < len(all_embeddings_data):
-                                    result_data = all_embeddings_data[indices[0][i]]
-                                    print(f"  - Resultado {i + 1}:")
-                                    print(f"    - Distância: {distances[0][i]}")
-                                    print(f"    - Nome do Arquivo: {result_data.get('file_name', 'Nome não disponível')}")
-                                    print(f"    - ID do Arquivo: {result_data.get('file_id', 'ID não disponível')}")
-                                    print(f"    - Caminho do Embedding: {result_data.get('embedding_path','Caminho não disponível')}")
-                                    if not all(key in result_data for key in ['file_name', 'file_id', 'embedding_path']):
-                                        print(f"    - Dados incompletos: {result_data}")
-                                else:
-                                    print(f"  - Resultado {i + 1}: Índice fora dos limites dos dados de embedding.")
-                        else:
-                            print("Aviso: Nenhum embedding disponível para teste de busca.")
-                    except Exception as e:
-                        print(f"Erro ao realizar busca de exemplo: {e}")
-                else:
-                    print("O índice Faiss não foi construído corretamente para teste de busca.")
-            else:
-                print("Falha ao carregar e adicionar os embeddings ao índice.")
-
-        except IndexError:
-            print("Nenhum dado de embedding encontrado para determinar a dimensão.")
-        except FileNotFoundError:
-            print(f"Erro ao carregar o primeiro embedding para determinar a dimensão.")
-        except Exception as e:
-            print(f"Ocorreu um erro ao inicializar ou carregar os embeddings: {e}")
-    else:
-        print("Nenhum embedding gerado. Impossível construir o índice Faiss.")
+    asyncio.run(main())

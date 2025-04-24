@@ -16,8 +16,8 @@ class ScrapeWebsiteTool(BaseTool):
     """
     Extrai o conteúdo textual da url.
     """
-    name = "scrape_website_content"
-    description = "Scrapes the text content from a given URL. Use this to extract information directly from websites."
+    name: str = "scrape_website_content"
+    description: str = "Scrapes the text content from a given URL. Use this to extract information directly from websites."
 
     def _run(self, url: str) -> str:
         try:
@@ -34,8 +34,8 @@ class SeleniumScrapingTool(BaseTool):
     """
     Extrai o conteúdo de um site com conteúdo dinâmico usando Selenium.
     """
-    name = "scrape_website_with_selenium"
-    description = "Scrapes content from a website using Selenium, allowing with JavaScript-rendered content."
+    name: str = "scrape_website_with_selenium"
+    description: str = "Scrapes content from a website using Selenium, allowing with JavaScript-rendered content."
 
     def _run(self, url: str, element_to_wait_for: str = None, wait_timeout: int = 10) -> str:
         driver = None
@@ -62,8 +62,8 @@ class ExtractLinksToll(BaseTool):
     """
     Extrai todos os links de uma página, mapeando a mesma.
     """
-    name = "extract_links"
-    description = "Extract all links from a given web page."
+    name: str = "extract_links"
+    description: str = "Extract all links from a given web page."
 
     def _run(self, url: str) -> list[str]:
         try:
@@ -79,8 +79,8 @@ class ExtractPageStructureTool(BaseTool):
     """
     Busca obter a estrutura da página para análise de conteúdo.
     """
-    name = "extract_page_structure"
-    description = "Extracts the structure of a web page (headings, paragraphs, lists, etc.)."
+    name: str = "extract_page_structure"
+    description: str = "Extracts the structure of a web page (headings, paragraphs, lists, etc.)."
 
     def _run(self, url: str) -> str:
         try:
@@ -100,8 +100,8 @@ class ClickAndScrapeTool(BaseTool):
     Usa Selenium para simular clicks e extrair o conteúdo resultante.
     Essencial para páginas com conteúdo dinâmico.
     """
-    name = "click_and_scrape"
-    description = "Simulates a click on a specific element and the scrapes the resulting content. Requires Selenium."
+    name: str = "click_and_scrape"
+    description: str = "Simulates a click on a specific element and the scrapes the resulting content. Requires Selenium."
 
     def _run(self, url: str, element_selector: str, wait_time: int = 5) -> str:
         driver = None
@@ -127,8 +127,8 @@ class SimulateMouseMovementTool(BaseTool):
     """
     Simula o movimento do mouse para um elemento específico da página web.
     """
-    name = "simulate_mouse_movement"
-    description = "Simulates mouse movement to a specific element on the page. Requires Selenium."
+    name: str = "simulate_mouse_movement"
+    description: str = "Simulates mouse movement to a specific element on the page. Requires Selenium."
 
     def _run(self, url: str, element_selector: str, wait_time: int = 2) -> str:
         driver = None
@@ -152,8 +152,8 @@ class SimulateScrollTool(BaseTool):
     """
     Simula a rolagem por uma página web.
     """
-    name = "simulate_scroll"
-    description = "Simulates scrolling on a web page. Requires Selenium."
+    name: str = "simulate_scroll"
+    description: str = "Simulates scrolling on a web page. Requires Selenium."
 
     def _run(self, url: str, distance: int, wait_time: int = 2) -> str:
         driver = None
@@ -174,8 +174,8 @@ class GetElementAttributesTool(BaseTool):
     """
     Obtém os atributos de um elemento específico da página web.
     """
-    name = "get_element_attributes"
-    description = "Gets attributes of a specific element on the page. Requires Selenium."
+    name: str = "get_element_attributes"
+    description: str = "Gets attributes of a specific element on the page. Requires Selenium."
 
     def _run(self, url: str, element_selector: str, attribute: str, wait_time: int = 2) -> str:
         driver = None
@@ -197,8 +197,8 @@ class SendToGoogleAnalyticsTool(BaseTool):
     """
     Envia os dados para o Google Analytics.
     """
-    name = "send_to_google_analytics"
-    description = "Sends data to Google Analytics. Requires a Measurement ID and API Secret."
+    name: str = "send_to_google_analytics"
+    description: str = "Sends data to Google Analytics. Requires a Measurement ID and API Secret."
 
     def _run(self, measurement_id: str, api_secret: str, client_id: str, event_name: str, event_params: dict) -> str:
         url = f"https://www.google-analytics.com/mp/collect?measurement_id={measurement_id}&api_secret={api_secret}"
@@ -220,8 +220,9 @@ class CrawlAndScrapeSiteTool(BaseTool):
     """
     Realiza varredura em um website, extraindo links e conteúdo de cada página do mesmo.
     """
-    name = "crawl_and_scrape_site"
-    description = "Crawls a website, extracts links, and scrapes content from each page.  Be cautious with this tool to avoid overloading the server."
+    name: str = "crawl_and_scrape_site"
+    description: str = ("Crawls a website, extracts links, and scrapes content from each page.  Be cautious with this "
+                        "tool to avoid overloading the server.")
 
     def _run(self, base_url: str, max_pages: int = 10) -> dict:
         crawled_data = {}

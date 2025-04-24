@@ -1,27 +1,29 @@
 """Contém as ferramentas que os agentes usarão para interagir com os arquivos."""
 
+# DocumentTools.py
+
 from crewai.tools import BaseTool
 from TextExtractor import extract_text, TEMP_DOWNLOAD_FOLDER
 import os
 import shutil
 
 class ExtractTextTool(BaseTool):
-    name = "extract_text_from_file"
-    description = "Extracts text content from a file. Supports .pdf, .docx, .txt, .xlsx, .pptx, .doc"
+    name: str = "extract_text_from_file"  # Adicione a anotação de tipo str
+    description: str = "Extracts text content from a file. Supports .pdf, .docx, .txt, .xlsx, .pptx, .doc"  # Adicione a anotação de tipo str
 
     def _run(self, file_path: str) -> str:
         return extract_text(file_path)
 
 class CountWordsTool(BaseTool):
-    name = "count_words"
-    description = "Counts the number of words in a given text."
+    name: str = "count_words"  # Adicione a anotação de tipo str
+    description: str = "Counts the number of words in a given text."  # Adicione a anotação de tipo str
 
     def _run(self, text: str) -> int:
         return len(text.split())
 
 class FileSummaryTool(BaseTool):
-    name = "summarize_file_content"
-    description = "Provides a brief summary of the content of a file."
+    name: str = "summarize_file_content"  # Adicione a anotação de tipo str
+    description: str = "Provides a brief summary of the content of a file."  # Adicione a anotação de tipo str
 
     def _run(self, file_path: str, max_length: int = 500) -> str:
         text = extract_text(file_path)
@@ -30,8 +32,8 @@ class FileSummaryTool(BaseTool):
         return "No summary available."
 
 class ListFilesTool(BaseTool):
-    name = "list_files_in_directory"
-    description = "Lists all files in a given directory."
+    name: str = "list_files_in_directory"  # Adicione a anotação de tipo str
+    description: str = "Lists all files in a given directory."  # Adicione a anotação de tipo str
 
     def _run(self, directory_path: str) -> list[str]:
         try:
@@ -40,8 +42,8 @@ class ListFilesTool(BaseTool):
             return []
 
 class CopyFileTool(BaseTool):
-    name = "copy_file"
-    description = "Copies a file from source to destination."
+    name: str = "copy_file"  # Adicione a anotação de tipo str
+    description: str = "Copies a file from source to destination."  # Adicione a anotação de tipo str
 
     def _run(self, source_path: str, destination_path: str) -> str:
         try:
@@ -53,8 +55,8 @@ class CopyFileTool(BaseTool):
             return f"Error copying file: {e}"
 
 class GetFileSizeTool(BaseTool):
-    name = "get_file_size"
-    description = "Gets the size of a file in bytes."
+    name: str = "get_file_size"  # Adicione a anotação de tipo str
+    description: str = "Gets the size of a file in bytes."  # Adicione a anotação de tipo str
 
     def _run(self, file_path: str) -> int:
         try:
@@ -63,8 +65,8 @@ class GetFileSizeTool(BaseTool):
             return 0
 
 class DeleteFileTool(BaseTool):
-    name = "delete_file"
-    description = "Deletes a file."
+    name: str = "delete_file"  # Adicione a anotação de tipo str
+    description: str = "Deletes a file."  # Adicione a anotação de tipo str
 
     def _run(self, file_path: str) -> str:
         try:
@@ -76,8 +78,8 @@ class DeleteFileTool(BaseTool):
             return f"Error deleting file: {e}"
 
 class MoveFileTool(BaseTool):
-    name = "move_file"
-    description = "Moves a file from source to destination."
+    name: str = "move_file"  # Adicione a anotação de tipo str
+    description: str = "Moves a file from source to destination."  # Adicione a anotação de tipo str
 
     def _run(self, source_path: str,  destination_path: str) -> str:
         try:
@@ -89,8 +91,8 @@ class MoveFileTool(BaseTool):
             return f"Error moving file: {e}"
 
 class CreateDirectoryTool(BaseTool):
-    name = "create_directory"
-    description = "Creates a new directory."
+    name: str = "create_directory"  # Adicione a anotação de tipo str
+    description: str = "Creates a new directory."  # Adicione a anotação de tipo str
 
     def _run(self, directory_path: str) -> str:
         try:
@@ -100,8 +102,8 @@ class CreateDirectoryTool(BaseTool):
             return f"Error creating directory: {e}"
 
 class DeleteDirectoryTool(BaseTool):
-    name = "delete_directory"
-    description = "Deletes a directory and its contents."
+    name: str = "delete_directory"  # Adicione a anotação de tipo str
+    description: str = "Deletes a directory and its contents."  # Adicione a anotação de tipo str
 
     def _run(self, directory_path: str) -> str:
         try:

@@ -53,21 +53,21 @@ def create_document_analysis_tasks(file_path: str) -> List[Task]:
         Task(
             description=f"Extrair o conteúdo completo do documento localizado em '{file_path}'.",
             agent=document_analyzer,
-            tools=[extract_text_tool],  # Passa a INSTÂNCIA da ferramenta para a Task
+            tools=[extract_text_tool],
             context=[file_path_context_task],
             expected_output="O conteúdo completo do arquivo em formato de texto."
         ),
         Task(
             description=f"Contar o número total de palavras no texto extraído de '{file_path}'.",
             agent=document_analyzer,
-            tools=[count_words_tool],  # Passa a INSTÂNCIA da ferramenta para a Task
+            tools=[count_words_tool],
             context=[file_path_context_task],
             expected_output="O número total de palavras no texto extraído."
         ),
         Task(
             description=f"Fornecer um resumo conciso do documento localizado em '{file_path}'. Almejar um resumo de no máximo 500 palavras.",
             agent=document_analyzer,
-            tools=[file_summary_tool],  # Passa a INSTÂNCIA da ferramenta para a Task
+            tools=[file_summary_tool],
             context=[file_path_context_task],
             expected_output="Um resumo conciso do conteúdo do arquivo com no máximo 500 palavras."
         )
