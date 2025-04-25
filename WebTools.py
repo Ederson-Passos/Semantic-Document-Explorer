@@ -10,7 +10,8 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.common.action_chains import ActionChains
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as ec
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
+
 
 class ScrapeWebsiteTool(BaseTool):
     """
@@ -216,18 +217,22 @@ class SendToGoogleAnalyticsTool(BaseTool):
         except requests.exceptions.RequestException as e:
             return f"Error sending data to Google Analytics: {e}"
 
+
 class CrawlAndScrapeSiteTool(BaseTool):
     """
     Realiza varredura em um website, extraindo links e conteúdo de cada página do mesmo.
     """
     name: str = "crawl_and_scrape_site"
-    description: str = ("Crawls a website, extracts links, and scrapes content from each page.  Be cautious with this "
-                        "tool to avoid overloading the server.")
+    description: str = ("Crawls a website, extracts links, and scrapes content from each page. "
+                        "Optimized to avoid overloading the server and respect website policies.")
 
-    def _run(self, base_url: str, max_pages: int = 10) -> dict:
+    def _run(self, base_url: str, max_pages: int = 10, extract: str = "text") -> dict:
         crawled_data = {}
         to_crawl = [base_url]
         crawled = set()
+        cache = {}  # Armazena o conteúdo extraído
+        session = requests.Session()  # Usamos sessão para persistir conexões
+        base_domain = urlparse(base_url).netloc
         page_count = 0
 
         while to_crawl and page_count < max_pages:
@@ -237,28 +242,63 @@ class CrawlAndScrapeSiteTool(BaseTool):
 
             try:
                 print(f"Crawling: {url}")
-                response = requests.get(url, timeout=10)
+                response = session.get(url, timeout=10)
                 response.raise_for_status()
                 soup = BeautifulSoup(response.text, 'html.parser')
 
-                # Extrair conteúdo principal.
-                # Precisa de ajuste conforme a estrutura do site.
-                main_content = soup.find('body').text.strip()  # Exemplo: pega o texto do <body>
-                crawled_data[url] = {"content": main_content}
+                page_links = self._extract_page_content(
+                    soup, url, extract, base_domain, crawled, to_crawl, crawled_data, cache
+                )
 
-                # Extrair links e adionar à fila.
-                links = [urljoin(url, a.get('href')) for a in soup.find_all('a', href=True)]
-                for link in links:
-                    if link.startswith(base_url) and link not in crawled and link not in to_crawl:
-                        to_crawl.append(link)
+                # Adiciona a chave "links" se links foram encontrados
+                if page_links:
+                    crawled_data[url]["links"] = page_links
 
                 crawled.add(url)
                 page_count += 1
-                time.sleep(1)  # Respeitar o servidor (delay de 1 segundo)
+                time.sleep(0.5) # Pausa para não sobrecarregar o servidor
 
-            except requests.exceptions.RequestException as e:
-                crawled_data[url] = {"error": str(e)}
+            except requests.exceptions.HTTPError as http_err:
+                print(f"HTTP Error at {url}: {http_err}")
+                crawled_data[url] = {"error": f"HTTP Error: {http_err}"}
+            except requests.exceptions.RequestException as req_err:
+                print(f"Request Error at {url}: {req_err}")
+                crawled_data[url] = {"error": f"Request Error: {req_err}"}
             except Exception as e:
-                crawled_data[url] = {"error": f"General error: {e}"}
+                print(f"General Error at {url}: {e}")
+                crawled_data[url] = {"error": f"General Error: {e}"}
+
+            finally:
+                session.close()
+                return crawled_data
 
         return crawled_data
+
+    def _extract_page_content(self, soup, url, extract, base_domain, crawled, to_crawl, crawled_data, cache):
+        """
+        Extrai o conteúdo principal, links e HTML de uma página, dependendo do parâmetro 'extract'.
+        """
+        page_links = []  # Inicializa a lista de links para esta página
+        if extract in ['text', 'text_and_links', 'all']:
+            # Extrair conteúdo principal.
+            main_content_parts = soup.find_all(['p', 'div', 'span', 'article'])  # Tags comuns de conteúdo.
+            main_content = '\n'.join(part.text.strip() for part in main_content_parts if part.text.strip())
+            crawled_data[url] = {"content": main_content}
+
+            if extract == 'all':
+                crawled_data[url]["html"] = soup.prettify()  # Salvar HTML completo
+                cache[url] = main_content  # Armazenar na cache
+            elif extract == 'text':
+                cache[url] = main_content
+
+            if extract in ['text_and_links', 'all']:
+                # Extrair links e adicionar à fila
+                links_found = soup.find_all('a', href=True)
+                for a in links_found:
+                    href = a.get('href')
+                    if href:  # Garante que href não é None
+                        link = urljoin(url, href)
+                        if urlparse(link).netloc == base_domain and link not in crawled and link not in to_crawl:
+                            to_crawl.append(link)
+                        page_links.append(link)
+        return page_links

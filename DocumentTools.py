@@ -1,9 +1,6 @@
 """Contém as ferramentas que os agentes usarão para interagir com os arquivos."""
-
-# DocumentTools.py
-
 from crewai.tools import BaseTool
-from TextExtractor import extract_text, TEMP_DOWNLOAD_FOLDER
+from TextExtractor import extract_text
 import os
 import shutil
 

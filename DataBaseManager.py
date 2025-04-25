@@ -11,6 +11,20 @@ from TextExtractor import process_and_tokenize_file, TEMP_DOWNLOAD_FOLDER
 # Diretório onde os arquivos serão baixados temporariamente
 DOWNLOAD_FOLDER = TEMP_DOWNLOAD_FOLDER
 
+def cleanup_temp_folder():
+    """Limpa o diretório temporário de download."""
+    for filename in os.listdir(DOWNLOAD_FOLDER):
+        file_path = os.path.join(DOWNLOAD_FOLDER, filename)
+        try:
+            if os.path.isfile(file_path) or os.path.islink(file_path):
+                os.unlink(file_path)
+        except Exception as e:
+            print(f"Erro ao remover {file_path}: {e}")
+    if os.path.exists(DOWNLOAD_FOLDER):
+        os.rmdir(DOWNLOAD_FOLDER)
+        print(f"Diretório temporário '{DOWNLOAD_FOLDER}' limpo.")
+
+
 class DataBaseManager:
     """
     Classe para interagir com a API do Google Drive v3, fornecendo serviços como
@@ -53,6 +67,30 @@ class DataBaseManager:
             print(f"Ocorreu um erro inesperado ao listar arquivos: {e}")
             return []
 
+    def _scan_items(self, items: List[dict], all_files: List[dict]):
+        """
+        Varre os itens retornados pela API do Google Drive.
+        Processa pastas recursivamente e adiciona arquivos a uma lista.
+        Args:
+            items: Lista de itens retornados pela API do Google Drive.
+            all_files: Lista para armazenar os arquivos encontrados.
+        """
+        for item in items:
+            item_id = item.get('id')
+            item_name = item.get('name', 'Nome Desconhecido')
+            mime_type = item.get('mimeType')
+
+            if mime_type == 'application/vnd.google-apps.folder':
+                if item_id not in self._processed_folders:
+                    print(f"Recursão -> Entrando na subpasta: '{item_name}' (ID: {item_id})")
+                    sub_folder_files = self.list_files_recursively(item_id)
+                    all_files.extend(sub_folder_files)
+                else:
+                    print(f"Aviso: Pasta '{item_name}' (ID: {item_id}) já processada, pulando.")
+            else:
+                print(f"Encontrado arquivo: '{item_name}' (ID: {item_id}), Mimetype: {mime_type}")
+                all_files.append({'id': item_id, 'name': item_name})
+
     def list_files_recursively(self, folder_id: str) -> List[dict]:
         """Lista todos os arquivos dentro de uma pasta e subpastas de forma recursiva."""
         if not self.service:
@@ -84,21 +122,8 @@ class DataBaseManager:
                 items = results.get("files", [])
                 print(f"Itens encontrados nesta página da pasta {folder_id}: {len(items)}")
 
-                for item in items:
-                    item_id = item.get('id')
-                    item_name = item.get('name', 'Nome Desconhecido')
-                    mime_type = item.get('mimeType')
-
-                    if mime_type == 'application/vnd.google-apps.folder':
-                        if item_id not in self._processed_folders:
-                            print(f"Recursão -> Entrando na subpasta: '{item_name}' (ID: {item_id})")
-                            sub_folder_files = self.list_files_recursively(item_id)
-                            all_files.extend(sub_folder_files)
-                        else:
-                            print(f"Aviso: Pasta '{item_name}' (ID: {item_id}) já processada, pulando.")
-                    else:
-                        print(f"Encontrado arquivo: '{item_name}' (ID: {item_id}), Mimetype: {mime_type}")
-                        all_files.append({'id': item_id, 'name': item_name})
+                # Percorrer todos os itens encontrados.
+                self._scan_items(items, all_files)
 
                 page_token = results.get('nextPageToken', None)
                 if page_token is None:
@@ -140,16 +165,3 @@ class DataBaseManager:
         except Exception as e:
             print(f"\n Erro inesperado durante o download (ID: {file_id}): {e}")
             return False
-
-    def cleanup_temp_folder(self):
-        """Limpa o diretório temporário de download."""
-        for filename in os.listdir(DOWNLOAD_FOLDER):
-            file_path = os.path.join(DOWNLOAD_FOLDER, filename)
-            try:
-                if os.path.isfile(file_path) or os.path.islink(file_path):
-                    os.unlink(file_path)
-            except Exception as e:
-                print(f"Erro ao remover {file_path}: {e}")
-        if os.path.exists(DOWNLOAD_FOLDER):
-            os.rmdir(DOWNLOAD_FOLDER)
-            print(f"Diretório temporário '{DOWNLOAD_FOLDER}' limpo.")
