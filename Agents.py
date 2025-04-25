@@ -62,7 +62,8 @@ class ReportingAgent(Agent):
         super().__init__(
             role="Web Analysis Reporter",
             goal="Generate comprehensive reports on website content and structure.",
-            backstory="I specialize in analyzing web data and generating detailed reports, providing insights into website content, structure, and metrics.",
+            backstory="I specialize in analyzing web data and generating detailed reports, providing insights into "
+                      "website content, structure, and metrics.",
             tools=[
                 GenerateReportTool(),  # Instanciando GenerateReportTool
             ],
