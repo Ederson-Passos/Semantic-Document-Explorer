@@ -18,7 +18,8 @@ class ScrapeWebsiteTool(BaseTool):
     Extrai o conteúdo textual da url.
     """
     name: str = "scrape_website_content"
-    description: str = "Scrapes the text content from a given URL. Use this to extract information directly from websites."
+    description: str = ("Scrapes the text content from a given URL. Use this to extract information directly from "
+                        "websites.")
 
     def _run(self, url: str) -> str:
         try:
@@ -102,7 +103,8 @@ class ClickAndScrapeTool(BaseTool):
     Essencial para páginas com conteúdo dinâmico.
     """
     name: str = "click_and_scrape"
-    description: str = "Simulates a click on a specific element and the scrapes the resulting content. Requires Selenium."
+    description: str = ("Simulates a click on a specific element and the scrapes the resulting content. Requires "
+                        "Selenium.")
 
     def _run(self, url: str, element_selector: str, wait_time: int = 5) -> str:
         driver = None
