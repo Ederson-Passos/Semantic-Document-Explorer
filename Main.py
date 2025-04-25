@@ -1,68 +1,96 @@
 import asyncio
-from crewai import Crew, Process, Task
-from Agents import WebScrapingAgent, AdvancedWebResearchAgent, ReportingAgent
-from WebTools import CrawlAndScrapeSiteTool, ExtractPageStructureTool
-from ReportGeneretor import GenerateReportTool
-import datetime
 import os
+import datetime
+from crewai import Crew, Process, Task
+from Agents import DocumentAnalysisAgent, ReportingAgent
+from DocumentTools import ExtractTextTool, CountWordsTool, FileSummaryTool
+from ReportGeneretor import GenerateReportTool
+from Authentication import GoogleDriveAPI
+from DataBaseManager import DataBaseManager
 
-SITE_URL = "https://www.loc.gov/"
-REPORT_DIR = "web_reports"
+
+DRIVE_FOLDER_ID = "1lXQ7R5z8NGV1YGUncVDHntiOFX35r6WO"
+REPORT_DIR = "google_drive_reports"
+TEMP_DIR = "temp_drive_files"
+
+
 os.makedirs(REPORT_DIR, exist_ok=True)
+os.makedirs(TEMP_DIR, exist_ok=True)
+
 
 async def main():
-    # Inicializa os agentes
-    web_scraper_agent = WebScrapingAgent()
-    advanced_research_agent = AdvancedWebResearchAgent()
-    reporting_agent = ReportingAgent()
+    # Initialize Google Drive API and DataBaseManager
+    drive_api = GoogleDriveAPI()
+    drive_service = drive_api.service
+    db_manager = DataBaseManager(drive_service)
 
-    # Inicializa as Tools
-    crawl_tool = CrawlAndScrapeSiteTool(name="optimized_crawl")
-    extract_structure_tool = ExtractPageStructureTool(name="extract_structure")
+    # Initialize agents and tools
+    document_agent = DocumentAnalysisAgent()
+    reporting_agent = ReportingAgent()
+    extract_text_tool = ExtractTextTool()
+    count_words_tool = CountWordsTool()
+    summarize_tool = FileSummaryTool()
     generate_report_tool = GenerateReportTool()
 
-    # Cria a Crew com os agentes e suas tarefas
-    crew = Crew(
-        agents=[web_scraper_agent, advanced_research_agent, reporting_agent],
-        tasks=[
-            # Tarefa 1: Rastrear o site e extrair informações básicas
-            Task(
-                agent=advanced_research_agent,
-                description=f"Crawl the website {SITE_URL} and extract all the content.",
-                tool=crawl_tool,
-                input={"base_url": SITE_URL, "extract": "text_and_links"},
-                expected_output="Comprehensive content and links of the website."
-            ),
-            # Tarefa 2: Analisar a estrutura do site
-            Task(
-                agent=advanced_research_agent,
-                description="Analyze the structure of the website.",
-                tool=extract_structure_tool,
-                input={"url": SITE_URL},
-                expected_output="Detailed structure of the website."
-            ),
-            # Tarefa 3: Gerar um relatório detalhado
-            Task(
-                agent=reporting_agent,
-                description="Generate a detailed report on the website's content and structure.",
-                tool=generate_report_tool,
-                input={"data": "Data from previous tasks"},
-                expected_output="Complete report on website analysis."
-            ),
-        ],
-        process=Process.sequential  # As tarefas serão executadas em ordem
+    # Get list of files from Google Drive
+    files = db_manager.list_files_recursively(DRIVE_FOLDER_ID)
+
+    if not files:
+        print("No files found in the specified Google Drive folder.")
+        return
+
+    # Download files and create tasks
+    tasks = []
+    downloaded_files = []  # Keep track of downloaded file paths
+    for file in files:
+        file_path = os.path.join(TEMP_DIR, file["name"])
+        if db_manager.download_file(file["id"], file["name"], TEMP_DIR):
+            downloaded_files.append(file_path)
+            tasks.append(
+                Task(
+                    agent=document_agent,
+                    description=f"Extract text from the file: {file['name']}",
+                    tool=extract_text_tool,
+                    input={"file_path": file_path},
+                    expected_output=f"Text content of the file: {file['name']}",
+                )
+            )
+        else:
+            print(f"Failed to download file: {file['name']}")
+
+    # Add the reporting task
+    tasks.append(
+        Task(
+            agent=reporting_agent,
+            description="Generate a detailed report on the content of the files.",
+            tool=generate_report_tool,
+            input={"data": "Data from previous tasks"},
+            expected_output="Complete report on file analysis.",
+        )
     )
 
-    # Executa a Crew e obtém o relatório
+    # Create and run the crew
+    crew = Crew(agents=[document_agent, reporting_agent], tasks=tasks, process=Process.sequential)
     report = crew.kickoff()
 
-    # Salva o relatório em um arquivo
+    # Save the report
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    report_file = os.path.join(REPORT_DIR, f"web_report_{timestamp}.txt")
+    report_file = os.path.join(REPORT_DIR, f"drive_report_{timestamp}.txt")
     with open(report_file, "w", encoding="utf-8") as f:
         f.write(report)
-
     print(f"Relatório salvo em: {report_file}")
+
+    # Clean up temporary files
+    for file_path in downloaded_files:
+        try:
+            os.remove(file_path)
+        except Exception as e:
+            print(f"Error deleting temporary file {file_path}: {e}")
+    try:
+        os.rmdir(TEMP_DIR)
+    except Exception as e:
+        print(f"Error removing temporary directory {TEMP_DIR}: {e}")
+
 
 if __name__ == "__main__":
     asyncio.run(main())
