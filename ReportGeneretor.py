@@ -1,5 +1,5 @@
 """
-Contém a lógica para gerar relatórios.
+Contém a lógica para gerar relatórios por lotes.
 """
 import datetime
 import os
@@ -56,7 +56,8 @@ async def process_batches(files, total_files, total_batches, batch_size, db_mana
 
         print(f" Baixando arquivos e criando tarefas de análise para o lote {batch_number}...")
         for file in current_batch_files:
-            process_file_in_batch(file, batch_number, db_manager, document_agent, batch_tasks, batch_downloaded_files, all_downloaded_files, temp_dir)
+            process_file_in_batch(file, batch_number, db_manager, document_agent, batch_tasks, batch_downloaded_files,
+                                  all_downloaded_files, temp_dir)
 
         if not any(task.agent == document_agent for task in batch_tasks):
             print(f"      Nenhuma tarefa de análise criada para o lote {batch_number}. Pulando para o próximo lote.")
@@ -68,7 +69,8 @@ async def process_batches(files, total_files, total_batches, batch_size, db_mana
         batch_tasks.append(partial_report_task)  # Adiciona a tarefa de relatório parcial às tarefas do lote.
 
         # Executar Crew por lote.
-        await run_batch_crew(batch_number, batch_tasks, document_agent, reporting_agent, all_partial_reports, batch_downloaded_files, temp_dir)
+        await run_batch_crew(batch_number, batch_tasks, document_agent, reporting_agent, all_partial_reports,
+                             batch_downloaded_files, temp_dir)
 
     consolidate_and_save_reports(all_partial_reports, report_dir)
     cleanup_temp_files(all_downloaded_files, temp_dir)
