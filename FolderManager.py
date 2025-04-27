@@ -53,3 +53,17 @@ def cleanup_temp_files(file_paths, temp_dir):
     except Exception as e:
         print(f"Erro ao remover diretório temporário {temp_dir}: {e}")
     print("Limpeza concluída.")
+
+
+def cleanup_temp_folder(download_folder):
+    """Limpa o diretório temporário de download."""
+    for filename in os.listdir(download_folder):
+        file_path = os.path.join(download_folder, filename)
+        try:
+            if os.path.isfile(file_path) or os.path.islink(file_path):
+                os.unlink(file_path)
+        except Exception as e:
+            print(f"Erro ao remover {file_path}: {e}")
+    if os.path.exists(download_folder):
+        os.rmdir(download_folder)
+        print(f"Diretório temporário '{download_folder}' limpo.")

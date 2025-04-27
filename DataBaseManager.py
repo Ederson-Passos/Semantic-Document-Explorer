@@ -6,23 +6,10 @@ from typing import List
 from googleapiclient.errors import HttpError
 from googleapiclient.http import MediaIoBaseDownload
 
-from TextExtractor import process_and_tokenize_file, TEMP_DOWNLOAD_FOLDER
+from TextExtractor import TEMP_DOWNLOAD_FOLDER
 
 # Diretório onde os arquivos serão baixados temporariamente
 DOWNLOAD_FOLDER = TEMP_DOWNLOAD_FOLDER
-
-def cleanup_temp_folder():
-    """Limpa o diretório temporário de download."""
-    for filename in os.listdir(DOWNLOAD_FOLDER):
-        file_path = os.path.join(DOWNLOAD_FOLDER, filename)
-        try:
-            if os.path.isfile(file_path) or os.path.islink(file_path):
-                os.unlink(file_path)
-        except Exception as e:
-            print(f"Erro ao remover {file_path}: {e}")
-    if os.path.exists(DOWNLOAD_FOLDER):
-        os.rmdir(DOWNLOAD_FOLDER)
-        print(f"Diretório temporário '{DOWNLOAD_FOLDER}' limpo.")
 
 
 class DataBaseManager:
