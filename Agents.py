@@ -1,4 +1,5 @@
 from crewai import Agent
+from typing import Any
 from DocumentTools import (ExtractTextTool, CountWordsTool, FileSummaryTool, ListFilesTool, CopyFileTool,
                            GetFileSizeTool, CreateDirectoryTool, DeleteDirectoryTool, DeleteFileTool, MoveFileTool)
 from WebTools import (ScrapeWebsiteTool, SeleniumScrapingTool, ExtractLinksToll, ExtractPageStructureTool,
@@ -8,11 +9,11 @@ from ReportGeneretor import GenerateReportTool
 
 class DocumentAnalysisAgent(Agent):
     """
-    Responsável por extrair o texto dos documentos e realizar contagem de palavras e resumos.
+    Responsável por extrair informações concisas dos documentos: contagem de palavras e resumos.
     """
-    def __init__(self):
+    def __init__(self, llm: Any = None):
         super().__init__(
-            role="Document Analyst",
+            role="Concise Document Analyst",
             goal="Extract information from various document types and prepare them for analysis.",
             backstory="I am a meticulous document analyst, skilled in extracting key information from a wide range of "
                       "document formats. My expertise lies in preparing documents for in-depth analysis.",
@@ -31,14 +32,15 @@ class DocumentAnalysisAgent(Agent):
                 )
             ],
             memory=True,
-            verbose=True
+            verbose=True,
+            llm=llm
         )
 
 class DataMiningAgent(Agent):
     """
     Encontra padrões e métricas nos dados extraídos.
     """
-    def __init__(self):
+    def __init__(self, llm: Any = None):
         super().__init__(
             role="Data Mining Expert",
             goal="Identify patterns, trends, and key metrics within the extracted data.",
@@ -51,31 +53,38 @@ class DataMiningAgent(Agent):
                 )
             ],
             memory=True,
-            verbose=True
+            verbose=True,
+            llm=llm
         )
 
 class ReportingAgent(Agent):
     """
-    Agente para gerar relatórios detalhados sobre o conteúdo da web.
+    Agente para gerar relatórios (resumos e contagens).
     """
-    def __init__(self):
+    def __init__(self, llm: Any = None):
         super().__init__(
-            role="Web Analysis Reporter",
-            goal="Generate comprehensive reports on website content and structure.",
-            backstory="I specialize in analyzing web data and generating detailed reports, providing insights into "
-                      "website content, structure, and metrics.",
+            role="Document Analysis Consolidator",
+            goal="Consolidate analysis results (summaries and word counts) from multiple documents and generate a "
+                 "cohesive report.",
+            backstory="I specialize in synthesizing information from multiple document analyses. I take summaries and "
+                      "word counts and organize them into a clear and informative final report, highlighting the key "
+                      "findings from each document and providing an overview.",
             tools=[
-                GenerateReportTool(),  # Instanciando GenerateReportTool
+                GenerateReportTool(
+                    name="generate_analysis_report",
+                    description="Gera um relatório de texto formatado a partir dos dados de análise consolidados (resumos, contagens de palavras) fornecidos no contexto."
+                ),
             ],
             memory=True,
-            verbose=True
+            verbose=True,
+            llm=llm
         )
 
 class FileManagementAgent(Agent):
     """
     Organiza os arquivos, move, copia, deleta, etc.
     """
-    def __init__(self):
+    def __init__(self, llm: Any = None):
         super().__init__(
             role="File Management Specialist",
             goal="Organize, manage, and maintain the document repository.",
@@ -113,14 +122,15 @@ class FileManagementAgent(Agent):
                 )
             ],
             memory=True,
-            verbose=True
+            verbose=True,
+            llm=llm
         )
 
 class WebScrapingAgent(Agent):
     """
     Responsável por extrair informações de páginas web.
     """
-    def __init__(self):
+    def __init__(self, llm: Any = None):
         super().__init__(
             role="Web Content Extractor",
             goal="Extract and summarize content from web pages.",
@@ -137,14 +147,15 @@ class WebScrapingAgent(Agent):
                 )
             ],
             memory=True,
-            verbose=True
+            verbose=True,
+            llm=llm
         )
 
 class AdvancedWebScrapingAgent(Agent):
     """
     Especializado em scraping que requer manipulação de JavaScript ou espera por elementos específicos.
     """
-    def __init__(self):
+    def __init__(self, llm: Any = None):
         super().__init__(
             role="Advanced Web Scraper",
             goal="Extract complex data from websites that rely heavily on JavaScript or require specific interactions.",
@@ -159,14 +170,15 @@ class AdvancedWebScrapingAgent(Agent):
                 )
             ],
             memory=True,
-            verbose=True
+            verbose=True,
+            llm=llm
         )
 
 class AdvancedWebResearchAgent(Agent):
     """
     Agente para realizar pesquisas web complexas, seguindo links e analisando a estrutura.
     """
-    def __init__(self):
+    def __init__(self, llm: Any = None):
         super().__init__(
             role="Advanced Web Researcher",
             goal="Explore websites deeply, following links, and structuring information.",
@@ -187,7 +199,8 @@ class AdvancedWebResearchAgent(Agent):
                 )
             ],
             memory=True,
-            verbose=True
+            verbose=True,
+            llm=llm
         )
 
 class BehaviorTrackingAgent(Agent):
@@ -195,7 +208,7 @@ class BehaviorTrackingAgent(Agent):
     Agente para rastrear o comportamento do usuário em uma página web,
     incluindo movimentos de mouse, cliques, rolagem e interações com elementos.
     """
-    def __init__(self):
+    def __init__(self, llm: Any = None):
         super().__init__(
             role="User Behavior Tracker",
             goal="Monitor and record user interactions on websites to understand behavior patterns.",
@@ -229,7 +242,8 @@ class BehaviorTrackingAgent(Agent):
                 )
             ],
             memory=True,
-            verbose=True
+            verbose=True,
+            llm=llm
         )
 
 class AnalyticsReportingAgent(Agent):
@@ -237,7 +251,7 @@ class AnalyticsReportingAgent(Agent):
     Agente para enviar dados coletados para ferramentas de analytics,
     como o Google Analytics.
     """
-    def __init__(self):
+    def __init__(self, llm: Any = None):
         super().__init__(
             role="Analytics Reporter",
             goal="Send collected data to analytics platforms for tracking and analysis.",
@@ -250,14 +264,15 @@ class AnalyticsReportingAgent(Agent):
                 )
             ],
             memory=True,
-            verbose=True
+            verbose=True,
+            llm = llm
         )
 
 class SiteCrawlerAgent(Agent):
     """
     Agente para rastrear um site inteiro, extrair conteúdo e identificar informações relevantes.
     """
-    def __init__(self):
+    def __init__(self, llm: Any = None):
         super().__init__(
             role="Website Crawler and Content Extractor",
             goal="Explore a website, extract content from all relevant pages, and identify key information.",
@@ -283,5 +298,6 @@ class SiteCrawlerAgent(Agent):
                 )
             ],
             memory=True,
-            verbose=True
+            verbose=True,
+            llm=llm
         )

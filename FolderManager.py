@@ -1,5 +1,5 @@
+import os
 from pathlib import Path
-
 
 def check_directory_existence(temp_dir):
     """
@@ -21,3 +21,35 @@ def check_directory_existence(temp_dir):
         print(f"Erro: '{temp_dir}' existe, mas não é um diretório.")
     else:
         print(f"Diretório '{temp_dir}' já existe.")
+
+def cleanup_temp_files(file_paths, temp_dir):
+    """
+    Função auxiliar para limpar arquivos e diretório temporários.
+    """
+    print("\nIniciando limpeza dos arquivos temporários...")
+    if file_paths is None:
+        file_paths = []
+
+    for file_path in file_paths:
+        try:
+            if os.path.exists(file_path):
+                os.remove(file_path)
+                print(f"  Arquivo temporário removido: {file_path}")
+        except Exception as e:
+            print(f"  Erro ao deletar arquivo temporário {file_path}: {e}")
+    try:
+        # Tenta remover o diretório apenas se ele estiver vazio
+        if os.path.exists(temp_dir) and not os.listdir(temp_dir):
+            os.rmdir(temp_dir)
+            print(f"Diretório temporário removido: {temp_dir}")
+        elif os.path.exists(temp_dir):
+            remaining_files = os.listdir(temp_dir)
+            if remaining_files:
+                print(f"Diretório temporário {temp_dir} não está vazio, não será removido.")
+            else:
+                os.rmdir(temp_dir)
+                print(f"Diretório temporário removido: {temp_dir}")
+
+    except Exception as e:
+        print(f"Erro ao remover diretório temporário {temp_dir}: {e}")
+    print("Limpeza concluída.")
