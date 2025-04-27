@@ -1,5 +1,5 @@
 """
-Contém a lógica para gerar relatórios por lotes.
+Contém a lógica para gerar relatórios por lotes de arquivos.
 """
 import datetime
 import os
