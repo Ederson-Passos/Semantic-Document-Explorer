@@ -1,6 +1,7 @@
 import os
 import time
 import traceback
+from typing import Optional
 
 from langchain_groq import ChatGroq
 from pydantic import SecretStr
@@ -12,18 +13,36 @@ class GroqLLM:
         if not self.groq_api_key:
             raise ValueError("A variável de ambiente GROQ_API_KEY não está definida.")
         self.groq_api_key = SecretStr(self.groq_api_key)
+
+        # Tenta carregar o token do Hugging Face
+        hf_token = os.getenv("HUGGING_FACE_HUB_TOKEN")
+        if not hf_token:
+            print("Aviso: Variável de ambiente HUGGING_FACE_HUB_TOKEN não definida.")
+            print("O carregamento do tokenizer pode falhar se o modelo for restrito (gated).")
+            raise ValueError("HUGGING_FACE_HUB_TOKEN é necessário para modelos restritos.")
+
+
         model_tokenizer_id = "meta-llama/Meta-Llama-3-8B"
         try:
-            print(f"Carregando tokenizer '{model_tokenizer_id}'")
-            self.tokenizer = AutoTokenizer.from_pretrained(model_tokenizer_id)
+            print(f"Carregando tokenizer '{model_tokenizer_id}'...")
+            # Passa o token para from_pretrained
+            self.tokenizer = AutoTokenizer.from_pretrained(
+                model_tokenizer_id,
+                token=hf_token
+            )
             print("Tokenizer carregado com sucesso.")
         except Exception as e:
             print(f"Erro ao carregar o tokenizer '{model_tokenizer_id}': {e}")
-            print("Certifique-se de que 'transformers' e 'sentencepiece' estão instalados.")
+            print("Verifique se:")
+            print("  1. Você aceitou os termos de uso em https://huggingface.co/meta-llama/Meta-Llama-3-8B-Instruct")
+            print("  2. A variável de ambiente HUGGING_FACE_HUB_TOKEN está definida corretamente no seu .env "
+                  "ou sistema.")
+            print("  3. As bibliotecas 'transformers' e 'sentencepiece' estão instaladas.")
             print("Usando contagem de palavras como fallback (impreciso).")
-            # Define como None para indicar que o tokenizer falhou.
             self.tokenizer = None
-            raise RuntimeError(f"Não foi possível carregar o tokenizer '{model_tokenizer_id}'.")
+            # Mantém o erro fatal, pois a contagem de tokens é importante
+            raise RuntimeError(f"Não foi possível carregar o tokenizer '{model_tokenizer_id}'. "
+                               f"Verifique o acesso e autenticação.")
 
         self.llm = ChatGroq(api_key=self.groq_api_key, model="groq/llama3-8b-8192")
         self.tokens_usados_no_minuto = 0
@@ -38,7 +57,7 @@ class GroqLLM:
             print("Aviso: Tokenizer não carregado. Usando contagem de palavras como fallback (impreciso).")
             return len(texto.split())
 
-    def executar_solicitacao(self, prompt: str) -> str | None:
+    def executar_solicitacao(self, prompt: str) -> Optional[str]:
         """Executa uma solicitação ao modelo Groq."""
         # Calcula os tokens.
         tokens_na_solicitacao = self.contador_de_tokens(prompt)
@@ -98,7 +117,7 @@ class GroqLLM:
             return tempo_para_esperar
         else:
             # Ainda há espaço no limite para esta solicitação
-            return 0
+            return 0.0
 
     def atualizar_contador_de_tokens(self, tokens_usados: int):
         """Atualiza o contador de tokens usados no minuto atual."""
