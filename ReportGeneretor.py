@@ -1,6 +1,7 @@
 """
 Contém a lógica para gerar relatórios por lotes de arquivos.
 """
+import asyncio
 import datetime
 import os
 import traceback
@@ -40,50 +41,100 @@ class GenerateReportTool(BaseTool):
         return report_path
 
 
+def process_batch_results(results_from_gather, batch_number, all_downloaded_files_overall, temp_dir):
+    """
+    Processes the results from asyncio.gather for a batch of files.
+    """
+    batch_tasks = []
+    batch_downloaded_files = []
+    print(f"   Processamento paralelo do lote {batch_number} concluído. Coletando resultados...")
+    for result in results_from_gather:
+        if isinstance(result, BaseException):
+            print(f"   Erro durante o processamento paralelo de um arquivo no lote {batch_number}: {result}")
+            if isinstance(result, Exception):
+                traceback.print_exc()
+            continue
+
+        if result and len(result) == 2:
+            analysis_task, downloaded_file_path = result
+            if analysis_task and downloaded_file_path:
+                batch_tasks.append(analysis_task)
+                batch_downloaded_files.append(downloaded_file_path)
+                all_downloaded_files_overall.append(downloaded_file_path)
+            else:
+                print(f"   Processamento de arquivo no lote {batch_number} não retornou tarefa/caminho válidos "
+                      f"(recebido: {result!r}).")
+        elif result is not None:
+            print(f"   Resultado inesperado recebido do processamento no lote {batch_number}: {result!r}")
+
+    if not batch_tasks:
+        print(f"      Nenhuma tarefa de análise criada com sucesso para o lote {batch_number}. Pulando para o "
+              f"próximo lote.")
+        cleanup_temp_files(batch_downloaded_files, temp_dir)
+    return batch_tasks, batch_downloaded_files
+
 async def process_batches(files, total_files, total_batches, batch_size, db_manager, document_agent,
                           reporting_agent, temp_dir, report_dir):
-    """Processa os arquivos em lotes, criando tarefas de análise e relatórios parciais."""
+    """
+    Processa os arquivos em lotes, criando tarefas de análise e relatórios parciais.
+    O processamento de arquivos dentro de cada lote é paralelizado.
+    """
     all_partial_reports = []
-    all_downloaded_files = []
+    all_downloaded_files_overall = []
 
     for i in range(0, total_files, batch_size):
         current_batch_files = files[i:i + batch_size]
         batch_number = (i // batch_size) + 1
         print(f"\nIniciando lote {batch_number} de {total_batches} ({len(current_batch_files)} arquivos)...")
 
-        batch_tasks = []
-        batch_downloaded_files = []
-
-        print(f" Baixando arquivos e criando tarefas de análise para o lote {batch_number}...")
+        # Execução com paralelização.
+        batch_tasks_coroutines = []  # Lista para guardar as corrotinas de processamento de arquivo.
+        print(f" Iniciando processamento paralelo para o lote {batch_number}...")
         for file in current_batch_files:
-            process_file_in_batch(file, batch_number, db_manager, document_agent, batch_tasks, batch_downloaded_files,
-                                  all_downloaded_files, temp_dir)
+            # Cria a corrotina para processar cada arquivo e adiciona à lista.
+            coro = process_file_in_batch(
+                file,
+                batch_number,
+                db_manager,
+                document_agent,
+                temp_dir
+            )
+            batch_tasks_coroutines.append(coro)
 
-        if not any(task.agent == document_agent for task in batch_tasks):
-            print(f"      Nenhuma tarefa de análise criada para o lote {batch_number}. Pulando para o próximo lote.")
-            cleanup_temp_files(batch_downloaded_files, temp_dir)  # Limpar por lote.
-            continue  # Pula para a próxima iteração do loop de lotes
+        # Executa todas as corrotinas do lote concorrentemente.
+        # Lista de tuplas: [(task, file_path), (None, None), ...]
+        results_from_gather = await asyncio.gather(*batch_tasks_coroutines, return_exceptions=True)
 
-        # Criar tarefa de relatório parcial para o lote.
+        # Processa os resultados após a conclusão do gather.
+        batch_tasks, batch_downloaded_files = process_batch_results(
+            results_from_gather, batch_number, all_downloaded_files_overall, temp_dir
+        )
+        if not batch_tasks:
+            continue
+        # Cria tarefa de relatório parcial para o lote.
+        # Passa as tarefas que foram realmente criadas.
         partial_report_task = create_partial_report_task(batch_number, batch_tasks, reporting_agent)
-        batch_tasks.append(partial_report_task)  # Adiciona a tarefa de relatório parcial às tarefas do lote.
+        # Adiciona a tarefa de relatório parcial às tarefas do lote.
+        tasks_for_crew = batch_tasks + [partial_report_task]
 
         # Executar Crew por lote.
-        await run_batch_crew(batch_number, batch_tasks, document_agent, reporting_agent, all_partial_reports,
+        await run_batch_crew(batch_number, tasks_for_crew, document_agent, reporting_agent, all_partial_reports,
                              batch_downloaded_files, temp_dir)
 
     consolidate_and_save_reports(all_partial_reports, report_dir)
-    cleanup_temp_files(all_downloaded_files, temp_dir)
+    cleanup_temp_files(all_downloaded_files_overall, temp_dir)
 
 
-def create_partial_report_task(batch_number, batch_tasks, reporting_agent):
+def create_partial_report_task(batch_number, analysis_tasks, reporting_agent):
     """
     Cria uma tarefa de relatório parcial para um lote específico.
     """
-    print(f"  Criando tarefa de relatório parcial para o lote {batch_number}...")
+    print(f"   Criando tarefa de relatório parcial para o lote {batch_number}...")
+    # Garante que analysis_tasks seja uma lista, mesmo que vazia.
+    analysis_tasks = analysis_tasks or []
     partial_report_task = Task(
         description=(
-            f"Consolide os resultados das {len(batch_tasks)} análises de documentos deste lote"
+            f"Consolide os resultados das {len(analysis_tasks)} análises de documentos deste lote"
             f" (Lote {batch_number}). Crie um relatório parcial que liste "
             "o resumo e a contagem de palavras para cada arquivo deste lote."
         ),
@@ -91,30 +142,37 @@ def create_partial_report_task(batch_number, batch_tasks, reporting_agent):
             f"Um relatório de texto único (.txt) que resume a análise (resumo e contagem) de cada documento "
             f"processado no Lote {batch_number}."
         ),
-        agent=reporting_agent,  # Usa o agente de relatório modificado
-        context=batch_tasks  # O contexto são apenas as tarefas deste lote.
+        agent=reporting_agent,
+        context=analysis_tasks  # O contexto são apenas as tarefas deste lote.
     )
     return partial_report_task
 
 
-def process_file_in_batch(file, batch_number, db_manager, document_agent, batch_tasks, batch_downloaded_files,
-                          all_downloaded_files, temp_dir):
+async def process_file_in_batch(file, batch_number, db_manager, document_agent, temp_dir) -> tuple | None:
     """
-    Processa um único arquivo dentro de um lote, baixando-o e criando uma tarefa de análise.
+    Processa um único arquivo: baixa (em thread separada) e cria uma tarefa de análise.
+    Retorna uma tupla (analysis_task, file_path) em caso de sucesso, ou None em caso de falha.
     """
     safe_filename = (
         file["name"].replace("/", "_").replace("\\", "_").replace(":", "_").replace("*", "_").replace("?", "_")
         .replace("\"", "_").replace("<", "_").replace(">", "_").replace("|", "_")
     )
     file_path = os.path.join(temp_dir, safe_filename)
-    print(f"    Processando arquivo: {safe_filename} (ID: {file['id']})")
-    try:
-        if db_manager.download_file(file["id"], safe_filename, temp_dir):
-            batch_downloaded_files.append(file_path)
-            all_downloaded_files.append(file_path)  # Adiciona à lista geral também
+    print(f"    [Lote {batch_number}] Iniciando processamento para: {safe_filename} (ID: {file['id']})")
 
-            if os.path.exists(file_path):
-                print(f"      Arquivo '{safe_filename}' baixado para '{file_path}'.")
+    # download_success = False
+    try:
+        # Executa a função de download síncrona em um thread separado para não bloquear o loop de eventos.
+        print(f"      [Lote {batch_number}] Agendando download para: {safe_filename}")
+        download_success = await asyncio.to_thread(
+            db_manager.download_file, file["id"], safe_filename, temp_dir
+        )
+
+        if download_success:
+            # Verifica se o arquivo realmente existe após o download.
+            if await asyncio.to_thread(os.path.exists, file_path):
+                print(f"      [Lote {batch_number}] Download concluído e verificado: {safe_filename}")
+                # Cria a tarefa de análise.
                 analysis_task = Task(
                     description=(
                         f"Analise o conteúdo do documento '{safe_filename}' (Lote {batch_number}). "
@@ -128,19 +186,35 @@ def process_file_in_batch(file, batch_number, db_manager, document_agent, batch_
                     ),
                     agent=document_agent,
                 )
-                batch_tasks.append(analysis_task)
+                # Retorna a tarefa criada e o caminho do arquivo.
+                return analysis_task, file_path
             else:
-                print(f"      Falha ao verificar a existência do arquivo baixado: {file_path}")
+                print(f"      [Lote {batch_number}] Falha ao verificar a existência do arquivo após "
+                      f"download: {file_path}")
+                return None, None  # Falha na verificação.
         else:
-            print(f"      Falha ao baixar o arquivo: {file['name']}")
+            print(f"      [Lote {batch_number}] Falha no download (retorno da função foi False): {safe_filename}")
+            return None, None  # Falha no download.
+
     except Exception as e:
-        print(f"      Erro ao processar o arquivo {file['name']} no lote {batch_number}: {e}")
+        print(f"      [Lote {batch_number}] Erro EXCEPCIONAL ao processar o arquivo {safe_filename}: {e}")
         traceback.print_exc()
+        # Retorna None para indicar falha, mesmo que o download tenha ocorrido antes da exceção.
+        # A limpeza será feita com base nos arquivos encontrados no diretório temp.
+        return None, None
 
 
 async def run_batch_crew(batch_number, batch_tasks, document_agent, reporting_agent, all_partial_reports,
                          batch_downloaded_files, temp_dir):
     """Executes the Crew for a specific batch and handles the results."""
+    # Garante que batch_tasks seja uma lista.
+    batch_tasks = batch_tasks or []
+    if not batch_tasks:
+        print(f"  Nenhuma tarefa válida para executar no Crew do lote {batch_number}.")
+        # Limpa os arquivos baixados para este lote, pois não haverá relatório
+        cleanup_temp_files(batch_downloaded_files, temp_dir)
+        return # Não executa o Crew se não houver tarefas
+
     print(f"  Criando e executando Crew para o lote {batch_number} com {len(batch_tasks)} tarefas...")
     batch_crew = Crew(
         agents=[document_agent, reporting_agent],
@@ -152,7 +226,7 @@ async def run_batch_crew(batch_number, batch_tasks, document_agent, reporting_ag
 
     try:
         # O resultado do kickoff do lote é o relatório parcial.
-        partial_report = batch_crew.kickoff()
+        partial_report = await asyncio.to_thread(batch_crew.kickoff)  # Executa o kickoff síncrono em thread.
         print(f"  Execução do Crew para o lote {batch_number} concluída.")
 
         # Coletar relatórios parciais.
@@ -169,6 +243,7 @@ async def run_batch_crew(batch_number, batch_tasks, document_agent, reporting_ag
         all_partial_reports.append(f"--- Relatório do Lote {batch_number} (ERRO NA EXECUÇÃO: {e}) ---")
 
     finally:
+        print(f"  Iniciando limpeza pós-Crew para o lote {batch_number}...")
         cleanup_temp_files(batch_downloaded_files, temp_dir)
 
 

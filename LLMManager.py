@@ -1,4 +1,3 @@
-import asyncio
 import os
 import time
 import traceback
@@ -39,7 +38,7 @@ class GroqLLM:
             print("Aviso: Tokenizer não carregado. Usando contagem de palavras como fallback (impreciso).")
             return len(texto.split())
 
-    def executar_solicitacao(self, prompt: str) -> str:
+    def executar_solicitacao(self, prompt: str) -> str | None:
         """Executa uma solicitação ao modelo Groq."""
         # Calcula os tokens.
         tokens_na_solicitacao = self.contador_de_tokens(prompt)
@@ -53,25 +52,36 @@ class GroqLLM:
         if tempo_para_esperar > 0:
             print(f"Limite de tokens por minuto ({self.limite_de_tokens_por_minuto}) atingido. Esperando"
                   f" {tempo_para_esperar:.1f} segundos.")
-            asyncio.sleep(tempo_para_esperar)
+            time.sleep(tempo_para_esperar)
             self.inicio_do_minuto = time.time()
             self.tokens_usados_no_minuto = 0
 
         try:
-            # Envia o prompt e recebe a resposta.
+            print(f"Enviando prompt para Groq ({tokens_na_solicitacao} tokens estimados)...")
             resposta = self.llm.invoke(prompt)
-            # Estima os tokens da resposta usando o tokenizer.
-            tokens_resposta_estimados = self.contador_de_tokens(resposta.content)
-            # Atualiza o contador geral com tokens do prompt + tokens da resposta.
-            self.atualizar_contador_de_tokens(tokens_na_solicitacao + tokens_resposta_estimados)  # Atualiza com prompt
-            # + resposta
-            return resposta.content
+            print("Resposta recebida do Groq.")
+
+            # Verifica se a resposta e o conteúdo são válidos
+            if resposta and isinstance(resposta.content, str):
+                response_content = resposta.content
+                # Estima os tokens da resposta
+                tokens_resposta_estimados = self.contador_de_tokens(response_content)
+                print(f"Resposta contém {tokens_resposta_estimados} tokens estimados.")
+                # Atualiza o contador geral com tokens do prompt + tokens da resposta
+                self.atualizar_contador_de_tokens(tokens_na_solicitacao + tokens_resposta_estimados)
+                return response_content # Retorna o conteúdo da string
+            else:
+                # Caso onde resposta.content não é uma string (pode ser None, etc.)
+                print(f"Aviso: A resposta do LLM não continha conteúdo de texto válido ou foi None. Resposta: {resposta}")
+                # Decide o que fazer - retornar None é consistente com o bloco except
+                return None
+
         except Exception as e:
             print(f"Erro ao executar solicitação: {e}")
             traceback.print_exc()
             return None
 
-    def verificar_limite_de_taxa(self, tokens_na_solicitacao: int) -> float:):
+    def verificar_limite_de_taxa(self, tokens_na_solicitacao: int) -> float:
         """Verifica se o limite de tokens por minuto foi atingido."""
         tempo_atual = time.time()
         tempo_decorrido = tempo_atual - self.inicio_do_minuto
