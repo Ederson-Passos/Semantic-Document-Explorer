@@ -1,7 +1,10 @@
+"""
+Define os Agentes especializados para análise de documentos e geração de relatórios.
+"""
+
 from crewai import Agent
 from typing import Any
-from DocumentTools import (ExtractTextTool, CountWordsTool, FileSummaryTool, ListFilesTool, CopyFileTool,
-                           GetFileSizeTool, CreateDirectoryTool, DeleteDirectoryTool, DeleteFileTool, MoveFileTool)
+from DocumentTools import ExtractTextTool, CountWordsTool, HuggingFaceSummarizationTool
 from WebTools import (ScrapeWebsiteTool, SeleniumScrapingTool, ExtractLinksToll, ExtractPageStructureTool,
                       ClickAndScrapeTool, SimulateMouseMovementTool, SimulateScrollTool, GetElementAttributesTool,
                       SendToGoogleAnalyticsTool, CrawlAndScrapeSiteTool)
@@ -10,28 +13,20 @@ from ReportGeneretor import GenerateReportTool
 class DocumentAnalysisAgent(Agent):
     """
     Responsável por extrair informações concisas dos documentos: contagem de palavras e resumos.
+    Utiliza ferramentas específicas para extração, contagem e sumarização.
     """
-    def __init__(self, llm: Any = None):
+    def __init__(self, llm: Any):
         super().__init__(
             role="Concise Document Analyst",
             goal="Extract information from various document types and prepare them for analysis.",
             backstory="I am a meticulous document analyst, skilled in extracting key information from a wide range of "
                       "document formats. My expertise lies in preparing documents for in-depth analysis.",
             tools=[
-                ExtractTextTool(
-                    name="extract_text_from_file",
-                    description="Extracts text content from a file. Supports .pdf, .docx, .txt, .xlsx, .pptx, .doc"
-                ),
-                CountWordsTool(
-                    name="count_words",
-                    description="Counts the number of words in a given text."
-                ),
-                FileSummaryTool(
-                    name="summarize_file_content",
-                    description="Provides a brief summary of the content of a file."
-                )
+                ExtractTextTool(),
+                CountWordsTool(),
+                HuggingFaceSummarizationTool()
             ],
-            memory=True,
+            memory=False,
             verbose=True,
             llm=llm
         )
@@ -40,17 +35,14 @@ class DataMiningAgent(Agent):
     """
     Encontra padrões e métricas nos dados extraídos.
     """
-    def __init__(self, llm: Any = None):
+    def __init__(self, llm: Any):
         super().__init__(
             role="Data Mining Expert",
             goal="Identify patterns, trends, and key metrics within the extracted data.",
             backstory="I am a seasoned data mining expert with a keen eye for detail. My mission is to uncover hidden "
                       "patterns and trends within complex datasets, providing valuable insights.",
             tools=[
-                CountWordsTool(
-                    name="count_words",
-                    description="Counts the number of words in a given text."
-                )
+                CountWordsTool()
             ],
             memory=True,
             verbose=True,
@@ -61,7 +53,7 @@ class ReportingAgent(Agent):
     """
     Agente para gerar relatórios (resumos e contagens).
     """
-    def __init__(self, llm: Any = None):
+    def __init__(self, llm: Any):
         super().__init__(
             role="Document Analysis Consolidator",
             goal="Consolidate analysis results (summaries and word counts) from multiple documents and generate a "
@@ -70,56 +62,7 @@ class ReportingAgent(Agent):
                       "word counts and organize them into a clear and informative final report, highlighting the key "
                       "findings from each document and providing an overview.",
             tools=[
-                GenerateReportTool(
-                    name="generate_analysis_report",
-                    description="Gera um relatório de texto formatado a partir dos dados de análise consolidados (resumos, contagens de palavras) fornecidos no contexto."
-                ),
-            ],
-            memory=True,
-            verbose=True,
-            llm=llm
-        )
-
-class FileManagementAgent(Agent):
-    """
-    Organiza os arquivos, move, copia, deleta, etc.
-    """
-    def __init__(self, llm: Any = None):
-        super().__init__(
-            role="File Management Specialist",
-            goal="Organize, manage, and maintain the document repository.",
-            backstory="I am a highly organized file management specialist, dedicated to maintaining a clean and "
-                      "efficient document repository. My skills ensure that all files are properly stored and "
-                      "accessible.",
-            tools=[
-                ListFilesTool(
-                    name="list_files_in_directory",
-                    description="Lists all files in a given directory."
-                ),
-                CopyFileTool(
-                    name="copy_file",
-                    description="Copies a file from source to destination."
-                ),
-                MoveFileTool(
-                    name="move_file",
-                    description="Moves a file from source to destination."
-                ),
-                DeleteFileTool(
-                    name="delete_file",
-                    description="Deletes a file."
-                ),
-                CreateDirectoryTool(
-                    name="create_directory",
-                    description="Creates a new directory."
-                ),
-                DeleteDirectoryTool(
-                    name="delete_directory",
-                    description="Deletes a directory and its contents."
-                ),
-                GetFileSizeTool(
-                    name="get_file_size",
-                    description="Gets the size of a file in bytes."
-                )
+                GenerateReportTool()
             ],
             memory=True,
             verbose=True,
@@ -130,7 +73,7 @@ class WebScrapingAgent(Agent):
     """
     Responsável por extrair informações de páginas web.
     """
-    def __init__(self, llm: Any = None):
+    def __init__(self, llm: Any):
         super().__init__(
             role="Web Content Extractor",
             goal="Extract and summarize content from web pages.",
@@ -155,7 +98,7 @@ class AdvancedWebScrapingAgent(Agent):
     """
     Especializado em scraping que requer manipulação de JavaScript ou espera por elementos específicos.
     """
-    def __init__(self, llm: Any = None):
+    def __init__(self, llm: Any):
         super().__init__(
             role="Advanced Web Scraper",
             goal="Extract complex data from websites that rely heavily on JavaScript or require specific interactions.",
@@ -178,7 +121,7 @@ class AdvancedWebResearchAgent(Agent):
     """
     Agente para realizar pesquisas web complexas, seguindo links e analisando a estrutura.
     """
-    def __init__(self, llm: Any = None):
+    def __init__(self, llm: Any):
         super().__init__(
             role="Advanced Web Researcher",
             goal="Explore websites deeply, following links, and structuring information.",
@@ -208,7 +151,7 @@ class BehaviorTrackingAgent(Agent):
     Agente para rastrear o comportamento do usuário em uma página web,
     incluindo movimentos de mouse, cliques, rolagem e interações com elementos.
     """
-    def __init__(self, llm: Any = None):
+    def __init__(self, llm: Any):
         super().__init__(
             role="User Behavior Tracker",
             goal="Monitor and record user interactions on websites to understand behavior patterns.",
@@ -251,7 +194,7 @@ class AnalyticsReportingAgent(Agent):
     Agente para enviar dados coletados para ferramentas de analytics,
     como o Google Analytics.
     """
-    def __init__(self, llm: Any = None):
+    def __init__(self, llm: Any):
         super().__init__(
             role="Analytics Reporter",
             goal="Send collected data to analytics platforms for tracking and analysis.",
@@ -272,7 +215,7 @@ class SiteCrawlerAgent(Agent):
     """
     Agente para rastrear um site inteiro, extrair conteúdo e identificar informações relevantes.
     """
-    def __init__(self, llm: Any = None):
+    def __init__(self, llm: Any):
         super().__init__(
             role="Website Crawler and Content Extractor",
             goal="Explore a website, extract content from all relevant pages, and identify key information.",
