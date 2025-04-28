@@ -1,8 +1,12 @@
 """Contém as ferramentas que os agentes usarão para interagir com os arquivos."""
+import traceback
+import os
+import math
+
 from crewai.tools import BaseTool
 from TextExtractor import extract_text
-import os
-import shutil
+from transformers import pipeline, AutoTokenizer
+
 
 class ExtractTextTool(BaseTool):
     name: str = "extract_text_from_file"
@@ -18,95 +22,138 @@ class CountWordsTool(BaseTool):
     def _run(self, text: str) -> int:
         return len(text.split())
 
-class FileSummaryTool(BaseTool):
-    name: str = "summarize_file_content"
-    description: str = "Provides a brief summary of the content of a file."
+class HuggingFaceSummarizationTool(BaseTool):
+    name: str = "generate_concise_summary"
+    description: str = (
+        "Generates a concise summary of a document's content using a Hugging Face model. "
+        "Handles potentially large documents by processing them in chunks."
+    )
+    model_name: str = "facebook/bart-large-cnn"
+    tokenizer = None
+    summarizer = None
 
-    def _run(self, file_path: str, max_length: int = 500) -> str:
-        text = extract_text(file_path)
-        if text:
-            return text[:max_length]
-        return "No summary available."
-
-class ListFilesTool(BaseTool):
-    name: str = "list_files_in_directory"
-    description: str = "Lists all files in a given directory."
-
-    def _run(self, directory_path: str) -> list[str]:
+    def __init__(self, model_name: str = "facebook/bart-large-cnn", **kwargs):
+        super().__init__(**kwargs)
         try:
-            return os.listdir(directory_path)
-        except FileNotFoundError:
-            return []
-
-class CopyFileTool(BaseTool):
-    name: str = "copy_file"
-    description: str = "Copies a file from source to destination."
-
-    def _run(self, source_path: str, destination_path: str) -> str:
-        try:
-            shutil.copy2(source_path, destination_path)
-            return f"File copied from '{source_path}' to '{destination_path}'"
-        except FileNotFoundError:
-            return f"Error: File not found at '{source_path}"
+            print(f"Initializing HuggingFaceSummarizationTool with model: {model_name}")
+            # Carrega o tokenizer e o pipeline de sumarização uma vez na inicialização.
+            self.tokenizer = AutoTokenizer.from_pretrained(model_name)
+            self.summarizer = pipeline("summarization", model=model_name, tokenizer=self.tokenizer)
+            print("Summarization pipeline loaded successfully.")
         except Exception as e:
-            return f"Error copying file: {e}"
+            print(f"Error initializing summarization pipeline for model {model_name}: {e}")
+            print("Summarization tool may not function correctly.")
+            # Considerar levantar um erro ou ter um fallback mais robusto
+            self.summarizer = None
+            self.tokenizer = None
 
-class GetFileSizeTool(BaseTool):
-    name: str = "get_file_size"
-    description: str = "Gets the size of a file in bytes."
+    def _run(self, file_path: str, max_summary_length: int = 150, min_summary_length: int = 30) -> str:
+        """
+        Summarizes the text extracted from the file_path. Handles large documents via chunking.
+        Args:
+            file_path (str): The path to the file to summarize.
+            max_summary_length (int): The maximum number of tokens for the summary.
+            min_summary_length (int): The minimum number of tokens for the summary.
+        Returns:
+            str: The generated summary or an error message.
+        """
+        if not self.summarizer or not self.tokenizer:
+            return "Error: Summarization model not initialized."
 
-    def _run(self, file_path: str) -> int:
+        print(f"Attempting to summarize file: {file_path}")
         try:
-            return os.path.getsize(file_path)
-        except FileNotFoundError:
-            return 0
+            # 1. Extrair texto do documento
+            text = extract_text(file_path)
+            if not text or not text.strip():
+                return f"No text could be extracted from '{os.path.basename(file_path)}'."
 
-class DeleteFileTool(BaseTool):
-    name: str = "delete_file"
-    description: str = "Deletes a file."
+            # 2. Lidar com Documentos Grandes (Chunking)
+            # Obter o limite máximo de tokens do modelo (menos espaço para tokens especiais)
+            model_max_length = self.tokenizer.model_max_length
+            # Definir um tamanho de chunk um pouco menor para segurança
+            chunk_size = model_max_length - 50
+            # Definir uma sobreposição para manter o contexto entre chunks
+            overlap = 50
 
-    def _run(self, file_path: str) -> str:
-        try:
-            os.remove(file_path)
-            return f"File '{file_path}' deleted successfully."
+            # Tokenizar o texto completo para saber o número total de tokens
+            tokens = self.tokenizer.encode(text)
+            num_tokens = len(tokens)
+            print(f"  - Total tokens in document: {num_tokens}")
+
+            if num_tokens <= chunk_size:
+                # Se o texto couber em um único chunk, sumariza diretamente
+                print(f"  - Document fits in one chunk. Summarizing directly...")
+                summary_list = self.summarizer(
+                    text,
+                    max_length=max_summary_length,
+                    min_length=min_summary_length,
+                    do_sample=False
+                )
+                summary = summary_list[0]['summary_text']
+
+            else:
+                # Se for maior, processa em chunks
+                print(f"  - Document exceeds model limit ({model_max_length} tokens). Processing in chunks...")
+                all_summaries = []
+                start = 0
+                while start < num_tokens:
+                    end = min(start + chunk_size, num_tokens)
+                    # Decodifica o chunk de volta para texto
+                    chunk_text = self.tokenizer.decode(tokens[start:end], skip_special_tokens=True)
+
+                    if not chunk_text.strip():  # Pula chunks vazios
+                        start += chunk_size - overlap
+                        continue
+
+                    print(f"    - Summarizing chunk: tokens {start} to {end}")
+                    try:
+                        # Ajusta o tamanho do resumo por chunk (proporcional ao número de chunks)
+                        num_chunks = math.ceil(num_tokens / (chunk_size - overlap))
+                        chunk_max_len = max(min_summary_length //
+                                            num_chunks + 10, max_summary_length //
+                                            num_chunks + 10)  # Ajuste heurístico
+                        chunk_min_len = max(10, min_summary_length // num_chunks)
+
+                        chunk_summary_list = self.summarizer(
+                            chunk_text,
+                            max_length=chunk_max_len,
+                            min_length=chunk_min_len,
+                            do_sample=False
+                        )
+                        all_summaries.append(chunk_summary_list[0]['summary_text'])
+                    except Exception as chunk_e:
+                        print(f"    - Error summarizing chunk {start}-{end}: {chunk_e}")
+                        # Pode adicionar um placeholder ou pular o chunk
+                        all_summaries.append(f"[Error summarizing chunk {start}-{end}]")
+
+                    # Avança para o próximo chunk com sobreposição
+                    start += chunk_size - overlap
+
+                # Combina os resumos dos chunks (pode precisar de sumarização adicional se for muito longo)
+                combined_summary = "\n".join(all_summaries)
+                print(f"  - Combined summaries from {len(all_summaries)} chunks.")
+
+                # Opcional: Sumarizar o resumo combinado se ele for muito longo
+                combined_tokens = self.tokenizer.encode(combined_summary)
+                if len(combined_tokens) > model_max_length:
+                    print("  - Combined summary is too long. Summarizing the combined summary...")
+                    final_summary_list = self.summarizer(
+                        combined_summary,
+                        max_length=max_summary_length,
+                        min_length=min_summary_length,
+                        do_sample=False
+                    )
+                    summary = final_summary_list[0]['summary_text']
+                else:
+                    summary = combined_summary
+
+
+            print(f"  - Summary generated for: {os.path.basename(file_path)}")
+            return summary.strip()
+
         except FileNotFoundError:
             return f"Error: File not found at '{file_path}'"
         except Exception as e:
-            return f"Error deleting file: {e}"
-
-class MoveFileTool(BaseTool):
-    name: str = "move_file"
-    description: str = "Moves a file from source to destination."
-
-    def _run(self, source_path: str,  destination_path: str) -> str:
-        try:
-            shutil.move(source_path, destination_path)
-            return f"File moved from '{source_path}' to '{destination_path}'"
-        except FileNotFoundError:
-            return f"Error: File not found at '{source_path}'"
-        except Exception as e:
-            return f"Error moving file: {e}"
-
-class CreateDirectoryTool(BaseTool):
-    name: str = "create_directory"
-    description: str = "Creates a new directory."
-
-    def _run(self, directory_path: str) -> str:
-        try:
-            os.makedirs(directory_path, exist_ok=True)
-            return f"Directory '{directory_path}' created successfully."
-        except Exception as e:
-            return f"Error creating directory: {e}"
-
-class DeleteDirectoryTool(BaseTool):
-    name: str = "delete_directory"
-    description: str = "Deletes a directory and its contents."
-
-    def _run(self, directory_path: str) -> str:
-        try:
-            shutil.rmtree(directory_path)
-            return f"Directory '{directory_path}' and its contents deleted successfully."
-        except FileNotFoundError:
-            return f"Error: Directory not found at '{directory_path}'"
-        except Exception as e:
-            return f"Error deleting directory: {e}"
+            print(f"An unexpected error occurred during summarization for {file_path}: {e}")
+            traceback.print_exc()
+            return f"Error summarizing file '{os.path.basename(file_path)}': {e}"
