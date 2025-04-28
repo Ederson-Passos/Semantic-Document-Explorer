@@ -2,6 +2,7 @@
 import traceback
 import os
 import math
+from typing import Optional, Any
 
 from crewai.tools import BaseTool
 from TextExtractor import extract_text
@@ -29,8 +30,8 @@ class HuggingFaceSummarizationTool(BaseTool):
         "Handles potentially large documents by processing them in chunks."
     )
     model_name: str = "facebook/bart-large-cnn"
-    tokenizer = None
-    summarizer = None
+    tokenizer: Optional[Any] = None
+    summarizer: Optional[Any] = None
 
     def __init__(self, model_name: str = "facebook/bart-large-cnn", **kwargs):
         super().__init__(**kwargs)
