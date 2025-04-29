@@ -57,6 +57,67 @@ class GroqLLM:
             print("Aviso: Tokenizer não carregado. Usando contagem de palavras como fallback (impreciso).")
             return len(texto.split())
 
+    def truncate_content(self, content: str, current_tokens: int, max_tokens: int, batch_number: int) -> str:
+        """
+        Trunca o conteúdo se a contagem de tokens exceder o máximo permitido.
+
+        Args:
+            content: O texto completo do arquivo.
+            current_tokens: A contagem de tokens já calculada para o conteúdo.
+            max_tokens: O número máximo de tokens que a LLM pode processar.
+            batch_number: O número do lote atual (para fins de log).
+
+        Returns:
+            O conteúdo original ou uma versão truncada com um aviso.
+        """
+        if current_tokens > max_tokens:
+            print(f"      [Lote {batch_number}] ALERTA: Conteúdo excedeu o limite de tokens ({current_tokens} > {max_tokens}). Truncando...")
+
+            # --- Estratégia de Truncamento ---
+            if self.tokenizer:
+                # Estratégia preferencial: usar o tokenizer para truncar
+                try:
+                    # Codifica, pega os primeiros 'max_tokens' e decodifica de volta
+                    # Adiciona uma pequena margem de segurança (ex: max_tokens - 10)
+                    safe_max_tokens = max(10, max_tokens - 10) # Garante que não seja negativo
+                    token_ids = self.tokenizer.encode(content, add_special_tokens=False) # Não adiciona BOS/EOS aqui
+                    truncated_ids = token_ids[:safe_max_tokens]
+                    # Decodifica, skip_special_tokens=True para evitar adicionar tokens especiais automaticamente
+                    truncated_content = self.tokenizer.decode(truncated_ids, skip_special_tokens=True)
+                    print(f"      [Lote {batch_number}] Conteúdo truncado usando tokenizer para ~{len(truncated_ids)} tokens.")
+                except Exception as e:
+                    print(f"      [Lote {batch_number}] Erro ao truncar com tokenizer ({e}), usando fallback de caracteres.")
+                    # Fallback para caracteres se o tokenizer falhar
+                    estimated_chars_per_token = len(content) / current_tokens if current_tokens > 0 else 4
+                    max_chars = int(max_tokens * estimated_chars_per_token * 0.95) # 95% para segurança
+                    truncated_content = content[:max_chars]
+            else:
+                # Fallback se o tokenizer não carregou: truncar por caracteres
+                print(f"      [Lote {batch_number}] Tokenizer não disponível, truncando por caracteres.")
+                # Estima quantos caracteres por token, em média (ajuste se necessário)
+                # Usar a estimativa de current_tokens se disponível, senão um valor padrão
+                estimated_chars_per_token = len(content) / current_tokens if current_tokens > 0 else 4
+                # Calcula o número máximo de caracteres, com uma pequena margem de segurança
+                max_chars = int(max_tokens * estimated_chars_per_token * 0.95) # 95% para segurança
+                truncated_content = content[:max_chars]
+
+            # Adiciona um aviso claro no final do conteúdo truncado
+            truncation_warning = "\n\n[... CONTEÚDO TRUNCADO DEVIDO AO LIMITE DE TOKENS ...]"
+            # Garante que o aviso caiba, removendo parte do final se necessário
+            if len(truncated_content) + len(truncation_warning) > len(content): # Evita crescer o conteúdo
+                truncated_content = truncated_content[:len(content)-len(truncation_warning)-1]
+
+            truncated_content += truncation_warning
+
+            # Opcional: Recalcular tokens do conteúdo truncado para log
+            # new_token_count = self.contador_de_tokens(truncated_content)
+            # print(f"      [Lote {batch_number}] Conteúdo truncado para aproximadamente {new_token_count} tokens.")
+
+            return truncated_content
+        else:
+            # Se não excedeu o limite, retorna o conteúdo original
+            return content
+
     def executar_solicitacao(self, prompt: str) -> Optional[str]:
         """Executa uma solicitação ao modelo Groq."""
         # Calcula os tokens.
