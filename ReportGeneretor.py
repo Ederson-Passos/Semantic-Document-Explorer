@@ -5,70 +5,128 @@ import asyncio
 import datetime
 import os
 import traceback
+import threading
+import fitz
 from typing import Dict, Any, Optional, List
-
 from crewai import Crew, Process, Task, Agent
-from crewai.tools import BaseTool
-
 from DataBaseManager import DataBaseManager
 from FolderManager import cleanup_temp_files
+from LLMManager import GroqLLM
 
+def blocking_download_wrapper(
+        db_manager: DataBaseManager,
+        file_id: str,
+        original_filename: str,
+        temp_dir: str,
+        batch_number: int
+) -> Optional[str]:
+    """
+    Wrapper para a função de download que será executada em uma thread separada.
+    """
+    thread_id = threading.get_ident()  # Obtém ID do thread atual
+    print(f"        [Thread:{thread_id} | Lote:{batch_number}] Iniciando db_manager.download_file "
+          f"para {original_filename}")
+    try:
+        # Chama a função de download original
+        result_path = db_manager.download_file(file_id, original_filename, temp_dir)
+        if result_path:
+            print(f"        [Thread:{thread_id} | Lote:{batch_number}] db_manager.download_file para "
+                  f"{original_filename} retornou sucesso: {result_path}")
+        else:
+            print(f"        [Thread:{thread_id} | Lote:{batch_number}] db_manager.download_file para "
+                  f"{original_filename} retornou falha (None).")
+        return result_path  # Retorna o caminho ou None.
+    except Exception as thread_e:
+        # Captura e loga qualquer erro DENTRO da execução do thread
+        print(f"        [Thread:{thread_id} | Lote:{batch_number}] ERRO DENTRO da thread de download "
+              f"para {original_filename}: {thread_e}")
+        traceback.print_exc()
+        return None  # Indica falha
 
-class GenerateReportTool(BaseTool):
-    name: str = "save_analysis_report"
-    description: str = ("Saves the provided analysis results dictionary to a text file. "
-                        "Input should be a dictionary where keys are filenames and values are analysis results.")
+async def download_file_with_timeout(
+        db_manager: DataBaseManager,
+        file_id: str,
+        original_filename: str,
+        temp_dir: str,
+        batch_number: int,
+        timeout_seconds: int = 180
+) -> Optional[str]:
+    """
+    Baixa um arquivo com timeout, usando uma thread separada.
+    """
+    print(f"      [Lote {batch_number}] Preparando para executar download em thread: {original_filename}")
+    download_wrapper_args = (db_manager, file_id, original_filename, temp_dir, batch_number)
+    download_task_wrapper = asyncio.to_thread(blocking_download_wrapper, *download_wrapper_args)
+    print(f"      [Lote {batch_number}] Aguardando download de {original_filename} (max {timeout_seconds}s)...")
+    try:
+        actual_downloaded_path = await asyncio.wait_for(download_task_wrapper, timeout=timeout_seconds)
+        return actual_downloaded_path
+    except asyncio.TimeoutError:
+        print(f"      [Lote {batch_number}] TIMEOUT! Download de {original_filename} excedeu {timeout_seconds} "
+              f"segundos.")
+        return None
 
-    def _run(self, analysis_results: dict, report_directory: str = "reports", filename_prefix: str = "analysis") -> str:
-        """
-        Saves the analysis results dictionary to a file.
-        Args:
-            analysis_results (dict): Dictionary containing analysis results.
-            report_directory (str): Directory to save the report.
-            filename_prefix (str): Prefix for the report filename.
-        Returns:
-            str: Path to the saved report file.
-        """
-        if not isinstance(analysis_results, dict):
-            return "Error: Input must be a dictionary."
+async def verify_file_existence(actual_downloaded_path: str, batch_number: int) -> bool:
+    """
+    Verifica se o arquivo baixado existe, usando uma thread separada.
+    """
+    actual_filename = os.path.basename(actual_downloaded_path)
+    print(f"      [Lote {batch_number}] Verificando existência do arquivo {actual_filename} em thread...")
+    file_exists = await asyncio.to_thread(os.path.exists, actual_downloaded_path)
+    print(f"      [Lote {batch_number}] Verificação de existência para {actual_filename} concluída: {file_exists}")
+    return file_exists
 
-        try:
-            # Cria o diretório especificado pela variável 'report_directory'.
-            # O argumento 'exist_ok=True' garante que nenhum erro será lançado se o diretório já existir.
-            os.makedirs(report_directory, exist_ok=True)
-            # Obtém a data e hora atuais e formata como uma string no formato "AnoMesDia_HoraMinutoSegundo".
-            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-            report_filename = f"{filename_prefix}_report_{timestamp}.txt"  # Cria o nome do arquivo de relatório.
-            report_path = os.path.join(report_directory, report_filename)  # Constrói o caminho.
+def extract_and_truncate_content(
+        actual_downloaded_path: str,
+        actual_filename: str,
+        batch_number: int,
+        llm_manager: GroqLLM,
+        max_input_tokens: int = 3000
+) -> tuple[str, int]:
+    """
+    Extrai o conteúdo do arquivo, conta os tokens e trunca se necessário.
+    """
+    file_content = ""
+    extraction_error = None
+    token_count = 0
+    try:
+        if actual_downloaded_path.lower().endswith(".pdf"):
+            try:
+                with fitz.open(actual_downloaded_path) as doc:
+                    file_content = "".join(page.get_text() for page in doc)
+                print(f"      [Lote {batch_number}] Extraído texto do PDF: {actual_filename}")
+            except Exception as pdf_error:
+                extraction_error = f"Erro ao extrair texto do PDF: {pdf_error}"
+                print(f"      [Lote {batch_number}] ERRO ao extrair texto do PDF {actual_filename}: {pdf_error}")
+        else:  # Assume outros formatos como texto.
+            try:
+                with open(actual_downloaded_path, "r", encoding="utf-8", errors='ignore') as f:
+                    file_content = f.read()
+                print(f"      [Lote {batch_number}] Lido conteúdo (como texto) de: {actual_filename}")
+            except Exception as read_error:
+                extraction_error = f"Erro ao ler arquivo como texto: {read_error}"
+                print(f"      [Lote {batch_number}] ERRO ao ler {actual_filename} como texto: {read_error}")
 
-            with open(report_path, "w", encoding="utf-8") as f:
-                f.write(f"Document Analysis Report - {timestamp}\n")
-                f.write("========================================\n\n")
-                for file_key, results in analysis_results.items():
-                    # Assume que file_key pode ser o nome do arquivo ou um identificador
-                    f.write(f"File: {file_key}\n")
-                    # Verifica se 'results' é um dicionário antes de usar .get()
-                    if isinstance(results, dict):
-                        f.write(f"  Word Count: {results.get('word_count', 'N/A')}\n")
-                        f.write(f"  Summary: {results.get('summary', 'N/A')}\n")
-                    else:
-                        # Se o resultado não for um dicionário (ex: string de erro da CrewAI)
-                        f.write(f"  Analysis Result: {results}\n")
-                    f.write("-" * 40 + "\n\n")
-            print(f"Report saved to: {report_path}")
-            return report_path
-        except Exception as e:
-            error_message = f"Error saving report: {e}"
-            print(error_message)
-            traceback.print_exc()
-            return error_message
+        if extraction_error:
+            file_content = f"ERRO DURANTE A EXTRAÇÃO DE CONTEÚDO: {extraction_error}"
+
+        token_count = llm_manager.contador_de_tokens(file_content)
+        print(f"      [Lote {batch_number}] Contagem de tokens: {token_count} para {actual_filename}")
+        file_content = llm_manager.truncate_content(file_content, token_count, max_input_tokens, batch_number)
+
+    except Exception as e:
+        print(f"      [Lote {batch_number}] ERRO GERAL durante extração/contagem de tokens para {actual_filename}: {e}")
+        traceback.print_exc()
+        file_content = f"ERRO CRÍTICO AO PROCESSAR CONTEÚDO DO ARQUIVO: {e}"
+    return file_content, token_count
 
 async def process_file_in_batch(
         file: Dict[str, str],
         batch_number: int,
         db_manager: DataBaseManager,
         document_agent: Agent,
-        temp_dir:str
+        temp_dir:str,
+        llm_manager: GroqLLM
 ) -> Optional[tuple[Task, str]]:
     """
     Processa um único arquivo: baixa (em thread separada) e cria uma tarefa de análise.
@@ -76,70 +134,103 @@ async def process_file_in_batch(
     """
     file_id = file.get('id')
     original_filename = file.get('name')
-
     if not file_id or not original_filename:
         print(f"    [Lote {batch_number}] Erro: Informações inválidas para o arquivo: {file}. Pulando.")
         return None
-
-    # Trata o nome do arquivo para evitar problemas com caracteres inválidos no path.
-    safe_filename = "".join(c if c.isalnum() or c in ('_', '.', '-') else '_' for c in original_filename)
-    # Garante que não comece com '.' ou '_' se o original não começava, para evitar arquivos ocultos inesperados.
-    if original_filename and not original_filename.startswith(('.', '_')) and safe_filename.startswith(('.', '_')):
-        safe_filename = "file_" + safe_filename.lstrip('._')
-
-    file_path = os.path.join(temp_dir, safe_filename)
-    print(f"    [Lote {batch_number}] Iniciando processamento para: {safe_filename} "
-          f"(Original: {original_filename}, ID: {file_id})")
-
-    download_success = False
+    print(f"    [Lote {batch_number}] Iniciando processamento para: {original_filename} (ID: {file_id})")
+    # Variável para guardar o caminho retornado.
+    actual_downloaded_path: Optional[str] = None
+    downloaded_task_wrapper = None  # Para referência em caso de timeout.
     try:
-        # Executa download síncrono em thread
-        print(f"      [Lote {batch_number}] Agendando download para: {safe_filename}")
-        download_success = await asyncio.to_thread(
-            db_manager.download_file, file_id, safe_filename, temp_dir # Passa safe_filename para download.
+        actual_downloaded_path = await download_file_with_timeout(
+            db_manager, file_id, original_filename, temp_dir, batch_number
         )
-        print(f"      [Lote {batch_number}] Tentativa de download de {safe_filename} finalizada "
-              f"(Sucesso reportado: {download_success}).")
+        # Lógica Pós-Download
+        if actual_downloaded_path:
+            # O nome do arquivo real agora é o basename do caminho retornado.
+            actual_filename = os.path.basename(actual_downloaded_path)
+            print(f"      [Lote {batch_number}] Download reportado como sucesso. Caminho: {actual_downloaded_path}")
 
-        if download_success:
-            # Verifica se o arquivo realmente existe após a tentativa de download.
-            file_exists = await asyncio.to_thread(os.path.exists, file_path)
+            file_exists = await verify_file_existence(actual_downloaded_path, batch_number)
 
             if file_exists:
-                print(f"      [Lote {batch_number}] Download concluído e arquivo verificado: {safe_filename}")
-                # Cria a tarefa de análise CrewAI.
+                print(f"      [Lote {batch_number}] Arquivo verificado: {actual_filename}. Extraindo conteúdo...")
+                # Ler conteúdo, contar tokens e truncar.
+                MAX_INPUT_TOKENS = 3000
+                file_content = ""
+                extraction_error = None
+                file_content, token_count = extract_and_truncate_content(
+                    actual_downloaded_path, actual_filename, batch_number, llm_manager
+                )
+                # Cria a tarefa de análise CrewAI
                 analysis_task = Task(
                     description=(
-                        f"Analise o conteúdo do documento '{safe_filename}' (do Lote {batch_number}). "
-                        f"O arquivo está localizado em: '{file_path}'. "
-                        "Sua análise deve incluir: 1. Contagem total de palavras. 2. Um resumo conciso (aproximadamente 2-3 frases)."
+                        f"Analise o seguinte conteúdo extraído do documento '{actual_filename}' "
+                        f"(originalmente '{original_filename}', Lote {batch_number}). "
+                        f"O conteúdo PODE TER SIDO TRUNCADO devido ao tamanho ({token_count} tokens fornecidos). "
+                        "Sua análise DEVE focar em:\n"
+                        "1. Calcular a contagem total de palavras do texto fornecido.\n"
+                        "2. Gerar um resumo EXTREMAMENTE CONCISO do conteúdo principal em 5 a 10 linhas de texto.\n"
+                        "NÃO inclua o texto original na sua resposta final. Retorne APENAS o dicionário Python.\n"
+                        f"\nCONTEÚDO PARA ANÁLISE:\n---\n{file_content}\n---"
                     ),
                     expected_output=(
-                        f"Um dicionário Python contendo a análise para '{safe_filename}' (Lote {batch_number}) com as chaves:\n"
-                        "- 'word_count': (int) A contagem total de palavras.\n"
-                        "- 'summary': (str) Um resumo do conteúdo (aproximadamente 2-3 frases)."
-                        # O output esperado deve ser o que o LLM retorna, não o nome do arquivo final.
+                        f"UM ÚNICO DICIONÁRIO Python contendo a análise para '{actual_filename}' (Lote {batch_number}) "
+                        "com EXATAMENTE as seguintes chaves:\n"
+                        "- 'word_count': (int) A contagem total de palavras do texto fornecido.\n"
+                        "- 'summary': (str) O resumo conciso do conteúdo (5 a 10 linhas).\n"
+                        "Não inclua nenhuma outra informação ou texto fora deste dicionário."
                     ),
                     agent=document_agent,
                 )
-                print(f"      [Lote {batch_number}] Tarefa de análise para {safe_filename} criada.")
-                # Retorna a tarefa criada e o caminho do arquivo.
-                return analysis_task, file_path
+                print(f"      [Lote {batch_number}] Tarefa de análise para {actual_filename} criada.")
+                return analysis_task, actual_downloaded_path
             else:
-                # Se download_success foi True, mas o arquivo não existe, algo deu errado.
                 print(f"      [Lote {batch_number}] ERRO INESPERADO: Download reportado como sucesso, "
-                      f"mas arquivo não encontrado em: {file_path}")
-                return None # Falha na verificação pós-download.
+                      f"mas arquivo não encontrado em: {actual_downloaded_path}")
+                return None
         else:
-            # Se download_success foi False.
-            print(f"      [Lote {batch_number}] Falha no download (retorno da função foi False): {safe_filename}")
-            return None # Falha no download.
+            # Se actual_downloaded_path for None.
+            print(f"      [Lote {batch_number}] Download falhou ou não concluído para: {original_filename}")
+            return None
 
     except Exception as e:
-        print(f"      [Lote {batch_number}] Erro EXCEPCIONAL durante processamento do arquivo {safe_filename}: {e}")
+        # Captura outros erros que podem ocorrer na própria coroutine process_file_in_batch
+        print(f"      [Lote {batch_number}] Erro EXCEPCIONAL durante processamento "
+              f"(fora da thread de download) do arquivo {original_filename}: {e}")
         traceback.print_exc()
-        # Retorna None para indicar falha. A limpeza ocorrerá no final do lote.
         return None
+
+def _handle_gather_exception(result: BaseException, batch_number: int):
+    """
+    Handles exceptions returned directly by asyncio.gather.
+    """
+    print(f"   [Lote {batch_number}] Erro capturado pelo asyncio.gather: {result!r}")
+    if isinstance(result, Exception):  # Loga traceback para Exceptions "reais".
+        traceback.print_exc()
+
+def _validate_and_collect_result(result: tuple, batch_number: int, batch_analysis_tasks: list, batch_downloaded_files: list):
+    """
+    Validates and collects a single result from asyncio.gather.
+    """
+    analysis_task, downloaded_file_path = result
+    # Verifica se ambos os elementos da tupla são válidos.
+    if (analysis_task and isinstance(analysis_task, Task) and downloaded_file_path and
+            isinstance(downloaded_file_path, str)):
+        batch_analysis_tasks.append(analysis_task)
+        batch_downloaded_files.append(downloaded_file_path)
+        print(f"     - Resultado válido coletado para: {os.path.basename(downloaded_file_path)}")
+    else:
+        # Caso onde process_file_in_batch retornou (None, None) ou algo inválido na tupla.
+        print(f"   [Lote {batch_number}] Processamento de arquivo não retornou tarefa/caminho válidos "
+              f"(recebido: {result!r}).")
+
+def _handle_unexpected_result(result: Any, batch_number: int):
+    """
+    Handles unexpected result types from asyncio.gather.
+    """
+    print(f"   [Lote {batch_number}] Resultado inesperado recebido do processamento paralelo: {result!r}")
+
 
 def process_batch_results(results_from_gather: list, batch_number: int):
     """
@@ -155,29 +246,12 @@ def process_batch_results(results_from_gather: list, batch_number: int):
 
     for result in results_from_gather:
         if isinstance(result, BaseException):
-            # Se o gather retornou uma exceção diretamente.
-            print(f"   [Lote {batch_number}] Erro capturado pelo asyncio.gather: {result!r}")
-            if isinstance(result, Exception):  # Loga traceback para Exceptions "reais".
-                traceback.print_exc()
-            continue  # Pula para o próximo resultado.
-
-        # Verifica se o resultado é a tupla esperada (Task, str).
+            _handle_gather_exception(result, batch_number)
+            continue
         if result and isinstance(result, tuple) and len(result) == 2:
-            analysis_task, downloaded_file_path = result
-            # Verifica se ambos os elementos da tupla são válidos.
-            if (analysis_task and isinstance(analysis_task, Task) and downloaded_file_path and
-                    isinstance(downloaded_file_path, str)):
-                batch_analysis_tasks.append(analysis_task)
-                batch_downloaded_files.append(downloaded_file_path)
-                print(f"     - Resultado válido coletado para: {os.path.basename(downloaded_file_path)}")
-            else:
-                # Caso onde process_file_in_batch retornou (None, None) ou algo inválido na tupla.
-                print(f"   [Lote {batch_number}] Processamento de arquivo não retornou tarefa/caminho válidos "
-                      f"(recebido: {result!r}).")
+            _validate_and_collect_result(result, batch_number, batch_analysis_tasks, batch_downloaded_files)
         elif result is not None:
-            # Log para tipos de resultado inesperados que não são Exceptions nem tuplas válidas.
-            print(f"   [Lote {batch_number}] Resultado inesperado recebido do processamento paralelo: {result!r}")
-        # else: result is None  # Já logado dentro de process_file_in_batch como falha
+            _handle_unexpected_result(result, batch_number)
 
     print(f"   [Lote {batch_number}] Coleta finalizada. {len(batch_analysis_tasks)} tarefas válidas, "
           f"{len(batch_downloaded_files)} arquivos baixados.")
@@ -252,7 +326,6 @@ async def run_batch_crew(
         # O resultado da crew será o resultado da última tarefa na lista (report_task, se existir)
         kickoff_result = await asyncio.to_thread(batch_crew.kickoff)
         print(f"  [Lote {batch_number}] Execução do Crew.kickoff() concluída.")
-
         # Verifica o resultado. Se report_task existia, espera-se que kickoff_result seja o conteúdo do relatório.
         if report_task:
             if kickoff_result and isinstance(kickoff_result, str):
@@ -270,7 +343,6 @@ async def run_batch_crew(
             print(f"    [Lote {batch_number}] Crew executada apenas para análise (sem tarefa de relatório). "
                   f"Resultado do kickoff: {kickoff_result}")
 
-
     except Exception as e:
         print(f"\n  [Lote {batch_number}] ERRO CRÍTICO durante a execução do Crew.kickoff(): {e}")
         traceback.print_exc()
@@ -287,11 +359,9 @@ def save_final_report(all_reports_content: List[str], report_dir: str):
     if not all_reports_content:
         print("Nenhum conteúdo de relatório parcial foi gerado para consolidar.")
         return
-
     print(f"Combinando {len(all_reports_content)} seções de relatório...")
     # Combina os conteúdos com um separador claro.
     final_report_text = "\n\n========================================\n\n".join(all_reports_content)
-
     # Salva o relatório final combinado.
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     report_filename = f"FINAL_consolidated_drive_report_{timestamp}.md" # Salva como Markdown.
@@ -315,10 +385,11 @@ async def process_batches(
         total_batches: int,
         batch_size: int,
         db_manager: DataBaseManager,
-        document_agent: Any, # Tipagem pode ser Agent
-        reporting_agent: Any, # Tipagem pode ser Agent
+        document_agent: Any,
+        reporting_agent: Any,
         temp_dir: str,
-        report_dir: str
+        report_dir: str,
+        llm_manager: GroqLLM
 ):
     """
     Orquestra o processamento dos arquivos em lotes:
@@ -345,7 +416,7 @@ async def process_batches(
         print(f"  [Lote {batch_number}] Agendando processamento paralelo de arquivos...")
         for file_info in current_batch_files:
             coro = process_file_in_batch(
-                file_info, batch_number, db_manager, document_agent, temp_dir
+                file_info, batch_number, db_manager, document_agent, temp_dir, llm_manager
             )
             batch_coroutines.append(coro)
 
@@ -374,8 +445,8 @@ async def process_batches(
         if report_content:
             all_final_reports_content.append(report_content)
         elif batch_analysis_tasks: # Se houve análise mas o relatório falhou/veio vazio
-            all_final_reports_content.append(f"--- Relatório do Lote {batch_number} (CONTEÚDO NÃO GERADO OU INVÁLIDO) ---")
-        # Se não houve nem análise, não adiciona nada
+            all_final_reports_content.append(f"--- Relatório do Lote {batch_number} "
+                                             f"(CONTEÚDO NÃO GERADO OU INVÁLIDO) ---")
 
         # 6. Limpeza dos arquivos temporários DESTE lote
         print(f"  [Lote {batch_number}] Iniciando limpeza de arquivos temporários do lote...")
@@ -386,8 +457,6 @@ async def process_batches(
     # 7. Consolidação e salvamento do relatório final após todos os lotes
     save_final_report(all_final_reports_content, report_dir)
 
-    # Limpeza final opcional (embora a limpeza por lote deva ter pego tudo)
     print("\n--- Limpeza Final ---")
-    # Converte o set para lista para a função cleanup
     cleanup_temp_files(list(all_downloaded_files_ever), temp_dir)
     print("Processamento de todos os lotes concluído.")

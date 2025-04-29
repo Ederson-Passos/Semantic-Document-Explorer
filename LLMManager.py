@@ -145,3 +145,23 @@ def setup_groq_llm():
         print(f"Ocorreu um erro inesperado ao inicializar o LLM Groq: {e}")
         traceback.print_exc()
         return None
+
+def initialize_llm():
+    """Inicializa o LLM Manager e retorna a instância do ChatGroq LLM."""
+    print("Inicializando o LLM Manager...")
+    llm_manager = setup_groq_llm()
+    if llm_manager is None:
+        print("Falha ao inicializar o LLM Manager. Encerrando.")
+        return None, None
+
+    try:
+        if hasattr(llm_manager, 'llm') and llm_manager.llm:
+            groq_chat_llm = llm_manager.llm
+            print("Instância do ChatGroq LLM obtida com sucesso.")
+            return llm_manager, groq_chat_llm
+        else:
+            print("Erro: O LLM Manager foi inicializado, mas a instância do LLM (ChatGroq) não está disponível.")
+            return None, None
+    except AttributeError:
+        print("Erro: O objeto retornado por setup_groq_llm() não possui o atributo 'llm'.")
+        return None, None

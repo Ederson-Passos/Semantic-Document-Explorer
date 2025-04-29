@@ -1,14 +1,19 @@
 """
 Define os Agentes especializados para análise de documentos e geração de relatórios.
 """
+import datetime
+import os
+import traceback
 
 from crewai import Agent
 from typing import Any
+
+from crewai.tools import BaseTool
+
 from DocumentTools import ExtractTextTool, CountWordsTool, HuggingFaceSummarizationTool
 from WebTools import (ScrapeWebsiteTool, SeleniumScrapingTool, ExtractLinksToll, ExtractPageStructureTool,
                       ClickAndScrapeTool, SimulateMouseMovementTool, SimulateScrollTool, GetElementAttributesTool,
                       SendToGoogleAnalyticsTool, CrawlAndScrapeSiteTool)
-from ReportGeneretor import GenerateReportTool
 
 class DocumentAnalysisAgent(Agent):
     """
@@ -48,6 +53,56 @@ class DataMiningAgent(Agent):
             verbose=True,
             llm=llm
         )
+
+class GenerateReportTool(BaseTool):
+    name: str = "save_analysis_report"
+    description: str = ("Saves the provided analysis results dictionary to a text file. "
+                        "Input should be a dictionary where keys are filenames and values are analysis results.")
+
+    def _run(self, analysis_results: dict, report_directory: str = "reports", filename_prefix: str = "analysis") -> str:
+        """
+        Saves the analysis results dictionary to a file.
+        Args:
+            analysis_results (dict): Dictionary containing analysis results.
+            report_directory (str): Directory to save the report.
+            filename_prefix (str): Prefix for the report filename.
+        Returns:
+            str: Path to the saved report file.
+        """
+        if not isinstance(analysis_results, dict):
+            return "Error: Input must be a dictionary."
+
+        try:
+            # Cria o diretório especificado pela variável 'report_directory'.
+            # O argumento 'exist_ok=True' garante que nenhum erro será lançado se o diretório já existir.
+            os.makedirs(report_directory, exist_ok=True)
+            # Obtém a data e hora atuais e formata como uma string no formato "AnoMesDia_HoraMinutoSegundo".
+            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            report_filename = f"{filename_prefix}_report_{timestamp}.txt"  # Cria o nome do arquivo de relatório.
+            report_path = os.path.join(report_directory, report_filename)  # Constrói o caminho.
+
+            with open(report_path, "w", encoding="utf-8") as f:
+                f.write(f"Document Analysis Report - {timestamp}\n")
+                f.write("========================================\n\n")
+                for file_key, results in analysis_results.items():
+                    # Assume que file_key pode ser o nome do arquivo ou um identificador
+                    f.write(f"File: {file_key}\n")
+                    # Verifica se 'results' é um dicionário antes de usar .get()
+                    if isinstance(results, dict):
+                        f.write(f"  Word Count: {results.get('word_count', 'N/A')}\n")
+                        f.write(f"  Summary: {results.get('summary', 'N/A')}\n")
+                    else:
+                        # Se o resultado não for um dicionário (ex: string de erro da CrewAI)
+                        f.write(f"  Analysis Result: {results}\n")
+                    f.write("-" * 40 + "\n\n")
+            print(f"Report saved to: {report_path}")
+            return report_path
+        except Exception as e:
+            error_message = f"Error saving report: {e}"
+            print(error_message)
+            traceback.print_exc()
+            return error_message
+
 
 class ReportingAgent(Agent):
     """

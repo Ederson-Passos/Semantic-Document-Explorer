@@ -67,3 +67,9 @@ def cleanup_temp_folder(download_folder):
     if os.path.exists(download_folder):
         os.rmdir(download_folder)
         print(f"Diretório temporário '{download_folder}' limpo.")
+
+def create_directories(report_dir, temp_dir):
+    """Cria os diretórios necessários para relatórios e arquivos temporários."""
+    print("Criando diretórios necessários...")
+    os.makedirs(report_dir, exist_ok=True)
+    os.makedirs(temp_dir, exist_ok=True)
