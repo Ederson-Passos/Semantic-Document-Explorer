@@ -8,10 +8,10 @@ import traceback
 import threading
 import fitz
 from typing import Dict, Any, Optional, List
-from crewai import Crew, Process, Task, Agent
+from crewai import Crew, Process, Task, Agent, LLM
 from DataBaseManager import DataBaseManager
 from FolderManager import cleanup_temp_files
-from LLMManager import GroqLLM
+from Tasks import create_document_analysis_tasks, create_reporting_tasks
 
 def blocking_download_wrapper(
         db_manager: DataBaseManager,
@@ -37,7 +37,7 @@ def blocking_download_wrapper(
                   f"{original_filename} retornou falha (None).")
         return result_path  # Retorna o caminho ou None.
     except Exception as thread_e:
-        # Captura e loga qualquer erro DENTRO da execução do thread
+        # Captura e loga qualquer erro dentro da execução do thread
         print(f"        [Thread:{thread_id} | Lote:{batch_number}] ERRO DENTRO da thread de download "
               f"para {original_filename}: {thread_e}")
         traceback.print_exc()
@@ -76,19 +76,19 @@ async def verify_file_existence(actual_downloaded_path: str, batch_number: int) 
     print(f"      [Lote {batch_number}] Verificação de existência para {actual_filename} concluída: {file_exists}")
     return file_exists
 
-def extract_and_truncate_content(
+def extract_and_truncate_content_simple(
         actual_downloaded_path: str,
         actual_filename: str,
         batch_number: int,
-        llm_manager: GroqLLM,
-        max_input_tokens: int = 3000
+        max_chars: int = 100000 # Defina um limite de caracteres razoável
 ) -> tuple[str, int]:
     """
-    Extrai o conteúdo do arquivo, conta os tokens e trunca se necessário.
+    Extrai o conteúdo do arquivo e trunca por CARACTERES se necessário (SEM API).
+    Retorna o conteúdo (possivelmente truncado) e a contagem de PALAVRAS.
     """
     file_content = ""
     extraction_error = None
-    token_count = 0
+    word_count = 0
     try:
         if actual_downloaded_path.lower().endswith(".pdf"):
             try:
@@ -98,10 +98,23 @@ def extract_and_truncate_content(
             except Exception as pdf_error:
                 extraction_error = f"Erro ao extrair texto do PDF: {pdf_error}"
                 print(f"      [Lote {batch_number}] ERRO ao extrair texto do PDF {actual_filename}: {pdf_error}")
-        else:  # Assume outros formatos como texto.
+        else: # Assume outros formatos como texto.
             try:
-                with open(actual_downloaded_path, "r", encoding="utf-8", errors='ignore') as f:
-                    file_content = f.read()
+                # Tenta detectar a codificação, com fallback para utf-8 ignore
+                try:
+                    with open(actual_downloaded_path, "r", encoding='utf-8') as f:
+                        file_content = f.read()
+                except UnicodeDecodeError:
+                    print(f"      [Lote {batch_number}] Falha ao ler {actual_filename} como UTF-8, "
+                          f"tentando latin-1...")
+                    try:
+                        with open(actual_downloaded_path, "r", encoding='latin-1') as f:
+                            file_content = f.read()
+                    except Exception as read_error_fallback:
+                        print(f"      [Lote {batch_number}] Falha ao ler {actual_filename} com latin-1 "
+                              f"também: {read_error_fallback}. Usando ignore.")
+                        with open(actual_downloaded_path, "r", encoding="utf-8", errors='ignore') as f:
+                            file_content = f.read()
                 print(f"      [Lote {batch_number}] Lido conteúdo (como texto) de: {actual_filename}")
             except Exception as read_error:
                 extraction_error = f"Erro ao ler arquivo como texto: {read_error}"
@@ -110,27 +123,41 @@ def extract_and_truncate_content(
         if extraction_error:
             file_content = f"ERRO DURANTE A EXTRAÇÃO DE CONTEÚDO: {extraction_error}"
 
-        token_count = llm_manager.contador_de_tokens(file_content)
-        print(f"      [Lote {batch_number}] Contagem de tokens: {token_count} para {actual_filename}")
-        file_content = llm_manager.truncate_content(file_content, token_count, max_input_tokens, batch_number)
+        # Contagem de palavras simples
+        word_count = len(file_content.split())
+        print(f"      [Lote {batch_number}] Contagem de palavras (simples): {word_count} para {actual_filename}")
+
+        # Truncamento simples por caracteres
+        if len(file_content) > max_chars:
+            print(f"      [Lote {batch_number}] ALERTA: Conteúdo ({len(file_content)} chars) excedeu "
+                  f"o limite de {max_chars} caracteres. Truncando...")
+            original_len = len(file_content)
+            file_content = file_content[:max_chars]
+            truncation_warning = "\n\n[... CONTEÚDO TRUNCADO DEVIDO AO LIMITE DE CARACTERES ...]"
+            # Garante que o aviso caiba
+            if len(file_content) + len(truncation_warning) > max_chars:
+                file_content = file_content[:max_chars - len(truncation_warning) - 1]
+            file_content += truncation_warning
+            print(f"      [Lote {batch_number}] Conteúdo truncado para {len(file_content)} caracteres.")
 
     except Exception as e:
-        print(f"      [Lote {batch_number}] ERRO GERAL durante extração/contagem de tokens para {actual_filename}: {e}")
+        print(f"      [Lote {batch_number}] ERRO GERAL durante extração/contagem/truncamento simples "
+              f"para {actual_filename}: {e}")
         traceback.print_exc()
         file_content = f"ERRO CRÍTICO AO PROCESSAR CONTEÚDO DO ARQUIVO: {e}"
-    return file_content, token_count
+        word_count = 0 # Zera contagem em caso de erro
+
+    return file_content, word_count
 
 async def process_file_in_batch(
         file: Dict[str, str],
         batch_number: int,
         db_manager: DataBaseManager,
-        document_agent: Agent,
         temp_dir:str,
-        llm_manager: GroqLLM
+        llm_instance: LLM
 ) -> Optional[tuple[Task, str]]:
     """
-    Processa um único arquivo: baixa (em thread separada) e cria uma tarefa de análise.
-    Retorna uma tupla (analysis_task, file_path) em caso de sucesso, ou None em caso de falha.
+    Processa um único arquivo: baixa, extrai/trunca (simples) e cria tarefa de análise.
     """
     file_id = file.get('id')
     original_filename = file.get('name')
@@ -138,68 +165,76 @@ async def process_file_in_batch(
         print(f"    [Lote {batch_number}] Erro: Informações inválidas para o arquivo: {file}. Pulando.")
         return None
     print(f"    [Lote {batch_number}] Iniciando processamento para: {original_filename} (ID: {file_id})")
-    # Variável para guardar o caminho retornado.
     actual_downloaded_path: Optional[str] = None
-    downloaded_task_wrapper = None  # Para referência em caso de timeout.
     try:
         actual_downloaded_path = await download_file_with_timeout(
             db_manager, file_id, original_filename, temp_dir, batch_number
         )
-        # Lógica Pós-Download
         if actual_downloaded_path:
-            # O nome do arquivo real agora é o basename do caminho retornado.
             actual_filename = os.path.basename(actual_downloaded_path)
             print(f"      [Lote {batch_number}] Download reportado como sucesso. Caminho: {actual_downloaded_path}")
 
             file_exists = await verify_file_existence(actual_downloaded_path, batch_number)
 
             if file_exists:
-                print(f"      [Lote {batch_number}] Arquivo verificado: {actual_filename}. Extraindo conteúdo...")
-                # Ler conteúdo, contar tokens e truncar.
-                MAX_INPUT_TOKENS = 3000
-                file_content = ""
-                extraction_error = None
-                file_content, token_count = extract_and_truncate_content(
-                    actual_downloaded_path, actual_filename, batch_number, llm_manager
+                print(f"      [Lote {batch_number}] Arquivo verificado: {actual_filename}. "
+                      f"Extraindo/Truncando (simples)...")
+
+                # Usa a função simplificada que não depende do llm_manager
+                file_content, word_count = extract_and_truncate_content_simple(
+                    actual_downloaded_path, actual_filename, batch_number
                 )
-                # Cria a tarefa de análise CrewAI
-                analysis_task = Task(
-                    description=(
+
+                # Cria a tarefa de análise CrewAI usando a função de Tasks.py
+                # Passa a llm_instance recebida para a função de criação de tarefa
+                analysis_tasks_list = create_document_analysis_tasks(
+                    file_path=actual_downloaded_path, # Passa o caminho para a descrição
+                    llm=llm_instance # Passa a instância crewai.LLM
+                )
+
+                if analysis_tasks_list:
+                    analysis_task = analysis_tasks_list[0] # Pega a primeira (e única) tarefa criada
+                    # Atualiza a descrição para incluir o conteúdo real (se necessário, ou confia que a
+                    # task usará as tools)
+                    analysis_task.description = (
                         f"Analise o seguinte conteúdo extraído do documento '{actual_filename}' "
                         f"(originalmente '{original_filename}', Lote {batch_number}). "
-                        f"O conteúdo PODE TER SIDO TRUNCADO devido ao tamanho ({token_count} tokens fornecidos). "
+                        f"O conteúdo PODE TER SIDO TRUNCADO ({word_count} palavras estimadas). "
                         "Sua análise DEVE focar em:\n"
-                        "1. Calcular a contagem total de palavras do texto fornecido.\n"
+                        "1. Calcular a contagem total de palavras do texto fornecido (use a ferramenta "
+                        "'count_words' se disponível, senão estime).\n"
                         "2. Gerar um resumo EXTREMAMENTE CONCISO do conteúdo principal em 5 a 10 linhas de texto.\n"
                         "NÃO inclua o texto original na sua resposta final. Retorne APENAS o dicionário Python.\n"
                         f"\nCONTEÚDO PARA ANÁLISE:\n---\n{file_content}\n---"
-                    ),
-                    expected_output=(
-                        f"UM ÚNICO DICIONÁRIO Python contendo a análise para '{actual_filename}' (Lote {batch_number}) "
-                        "com EXATAMENTE as seguintes chaves:\n"
-                        "- 'word_count': (int) A contagem total de palavras do texto fornecido.\n"
-                        "- 'summary': (str) O resumo conciso do conteúdo (5 a 10 linhas).\n"
-                        "Não inclua nenhuma outra informação ou texto fora deste dicionário."
-                    ),
-                    agent=document_agent,
-                )
-                print(f"      [Lote {batch_number}] Tarefa de análise para {actual_filename} criada.")
-                return analysis_task, actual_downloaded_path
+                    )
+                    print(f"      [Lote {batch_number}] Tarefa de análise para {actual_filename} criada/atualizada.")
+                    return analysis_task, actual_downloaded_path
+                else:
+                    print(f"      [Lote {batch_number}] ERRO: create_document_analysis_tasks não retornou tarefas.")
+                    return None
             else:
                 print(f"      [Lote {batch_number}] ERRO INESPERADO: Download reportado como sucesso, "
                       f"mas arquivo não encontrado em: {actual_downloaded_path}")
                 return None
         else:
-            # Se actual_downloaded_path for None.
             print(f"      [Lote {batch_number}] Download falhou ou não concluído para: {original_filename}")
             return None
 
     except Exception as e:
-        # Captura outros erros que podem ocorrer na própria coroutine process_file_in_batch
-        print(f"      [Lote {batch_number}] Erro EXCEPCIONAL durante processamento "
-              f"(fora da thread de download) do arquivo {original_filename}: {e}")
+        print(f"      [Lote {batch_number}] Erro EXCEPCIONAL durante processamento (fora download) "
+              f"do arquivo {original_filename}: {e}")
         traceback.print_exc()
+        # Limpeza do arquivo baixado
+        if actual_downloaded_path and os.path.exists(actual_downloaded_path):
+            actual_filename = os.path.basename(actual_downloaded_path)
+            try:
+                os.remove(actual_downloaded_path)
+                print(f"      [Lote {batch_number}] Arquivo baixado {actual_filename} removido devido a erro.")
+            except OSError as rm_err:
+                print(f"      [Lote {batch_number}] Erro ao tentar remover arquivo {actual_filename} após "
+                      f"falha: {rm_err}")
         return None
+
 
 def _handle_gather_exception(result: BaseException, batch_number: int):
     """
@@ -209,7 +244,12 @@ def _handle_gather_exception(result: BaseException, batch_number: int):
     if isinstance(result, Exception):  # Loga traceback para Exceptions "reais".
         traceback.print_exc()
 
-def _validate_and_collect_result(result: tuple, batch_number: int, batch_analysis_tasks: list, batch_downloaded_files: list):
+def _validate_and_collect_result(
+        result: tuple,
+        batch_number: int,
+        batch_analysis_tasks: list,
+        batch_downloaded_files: list
+):
     """
     Validates and collects a single result from asyncio.gather.
     """
@@ -257,36 +297,52 @@ def process_batch_results(results_from_gather: list, batch_number: int):
           f"{len(batch_downloaded_files)} arquivos baixados.")
     return batch_analysis_tasks, batch_downloaded_files
 
-def create_report_task(batch_number: int, analysis_tasks: List[Task], reporting_agent: Any):
+def create_report_task(
+        batch_number: int,
+        analysis_tasks: List[Task],
+        llm_instance: LLM
+):
     """
-    Cria a tarefa final de relatório para um lote específico, usando as tarefas de análise como contexto.
+    Cria a tarefa final de relatório para um lote, usando a instância LLM fornecida.
     """
     if not analysis_tasks:
         print(f"   [Lote {batch_number}] Nenhuma tarefa de análise para incluir no relatório.")
-        return None # Não cria tarefa de relatório se não houver análises.
+        return None
 
     print(f"   [Lote {batch_number}] Criando tarefa de relatório com {len(analysis_tasks)} análises como contexto...")
-    report_task = Task(
-        description=(
-            f"Consolide os resultados das {len(analysis_tasks)} tarefas de análise de documentos fornecidas como contexto "
-            f"(representando o Lote {batch_number}). Para cada documento analisado, extraia as informações relevantes "
+
+    # Usa a função de Tasks.py para criar a tarefa, passando a llm_instance
+    reporting_tasks_list = create_reporting_tasks(
+        llm=llm_instance, # Passa a instância crewai.LLM
+        report_directory="dummy_dir" # O diretório real é tratado depois
+    )
+
+    if reporting_tasks_list:
+        report_task = reporting_tasks_list[0]
+        # Define o contexto da tarefa de relatório como as tarefas de análise concluídas
+        report_task.context = analysis_tasks
+        # Atualiza a descrição se necessário.
+        report_task.description = (
+            f"Consolide os resultados das {len(analysis_tasks)} tarefas de análise de documentos "
+            f"fornecidas como contexto (representando o Lote {batch_number}). Para cada documento analisado, "
+            f"extraia as informações relevantes "
             "(como nome do arquivo implícito na descrição da tarefa de análise, contagem de palavras e resumo) "
             "do resultado da respectiva tarefa de análise. "
             "Formate a saída como um relatório único e coeso em formato Markdown, com uma seção para cada documento."
-        ),
-        expected_output=(
-            "Um relatório em formato Markdown. O relatório deve ter:\n"
-            "- Um título geral (ex: 'Relatório de Análise - Lote {batch_number}').\n"
-            "- Uma seção para CADA documento analisado, contendo:\n"
+        )
+        report_task.expected_output=(
+            "Uma contendo o relatório completo em formato Markdown. O relatório deve ter:\n"
+            "- Um título geral (ex: '# Relatório de Análise - Lote {batch_number}').\n"
+            "- Uma seção para CADA documento analisado (use `##` ou `###` para o nome do arquivo), contendo:\n"
             "  - O nome do arquivo (tente inferir da descrição da tarefa de análise).\n"
-            "  - A contagem de palavras encontrada.\n"
-            "  - O resumo gerado.\n"
-            "- Use formatação Markdown clara (ex: cabeçalhos `###`, listas, etc.)."
-        ),
-        agent=reporting_agent,
-        context=analysis_tasks # Passa as tarefas de análise concluídas como contexto para esta tarefa.
-    )
-    return report_task
+            "  - A contagem de palavras encontrada (ex: `* **Contagem de palavras:** X`).\n"
+            "  - O resumo gerado (ex: `* **Resumo:** ...`).\n"
+            "- Use formatação Markdown clara."
+        )
+        return report_task
+    else:
+        print(f"   [Lote {batch_number}] ERRO: create_reporting_tasks não retornou tarefas.")
+        return None
 
 async def run_batch_crew(
         batch_number: int,
@@ -316,7 +372,7 @@ async def run_batch_crew(
         agents=agents_for_crew,
         tasks=tasks_for_crew,
         process=Process.sequential, # Executa tarefas em ordem: primeiro análises, depois relatório
-        verbose=True,
+        verbose=False,
         memory=False
     )
 
@@ -385,78 +441,70 @@ async def process_batches(
         total_batches: int,
         batch_size: int,
         db_manager: DataBaseManager,
-        document_agent: Any,
-        reporting_agent: Any,
+        document_agent: Agent, # Agente já tem LLM
+        reporting_agent: Agent, # Agente já tem LLM
         temp_dir: str,
         report_dir: str,
-        llm_manager: GroqLLM
+        llm_instance: LLM, # Recebe a instância crewai.LLM
+        llm_manager: Optional[Any] = None # Mantido opcional se precisar das utils
 ):
     """
-    Orquestra o processamento dos arquivos em lotes:
-    1. Para cada lote, processa arquivos em paralelo (download + criação de task de análise).
-    2. Coleta os resultados do processamento paralelo.
-    3. Cria uma tarefa de relatório para o lote (se houver análises).
-    4. Executa a CrewAI para o lote (análises + relatório).
-    5. Coleta o conteúdo do relatório gerado.
-    6. Limpa os arquivos temporários do lote.
-    7. Após todos os lotes, consolida e salva o relatório final.
+    Orquestra o processamento dos arquivos em lotes com a instância LLM fornecida.
     """
-    all_final_reports_content = []  # Lista para guardar o conteúdo (string) de cada relatório de lote.
-    all_downloaded_files_ever = set()  # Usar set para evitar duplicatas e facilitar limpeza final
+    all_final_reports_content = []
+    all_downloaded_files_ever = set()
 
-    for i in range(0, total_files, batch_size):
+    for i in range(0, total_files,  batch_size):
         start_index = i
         end_index = min(i + batch_size, total_files)
         current_batch_files = files[start_index:end_index]
         batch_number = (i // batch_size) + 1
         print(f"\n--- Iniciando Lote {batch_number} de {total_batches} ({len(current_batch_files)} arquivos) ---")
 
-        # 1. Processamento paralelo dos arquivos do lote
         batch_coroutines = []
         print(f"  [Lote {batch_number}] Agendando processamento paralelo de arquivos...")
         for file_info in current_batch_files:
+            # Passa llm_instance para process_file_in_batch
             coro = process_file_in_batch(
-                file_info, batch_number, db_manager, document_agent, temp_dir, llm_manager
+                file_info, batch_number, db_manager, document_agent, temp_dir, llm_instance
             )
             batch_coroutines.append(coro)
 
-        # Executa as corotinas de process_file_in_batch concorrentemente
+        # Espera o processamento paralelo (download, extração, criação de task)
         gather_results = await asyncio.gather(*batch_coroutines, return_exceptions=True)
 
-        # 2. Coleta e validação dos resultados
+        # Processa os resultados para obter tarefas válidas e arquivos baixados
         batch_analysis_tasks, batch_downloaded_files = process_batch_results(gather_results, batch_number)
-        # Adiciona os arquivos baixados neste lote ao conjunto geral
-        all_downloaded_files_ever.update(batch_downloaded_files)
+        all_downloaded_files_ever.update(batch_downloaded_files) # Adiciona ao set global
 
-        # 3. Criação da tarefa de relatório (se houver tarefas de análise)
-        batch_report_task = create_report_task(batch_number, batch_analysis_tasks, reporting_agent)
+        # Cria a tarefa de relatório para o lote, passando llm_instance
+        batch_report_task = create_report_task(
+            batch_number, batch_analysis_tasks, reporting_agent, llm_instance
+        )
 
-        # 4. Execução da CrewAI para o lote
-        # Passa as tarefas de análise e a tarefa de relatório (que pode ser None)
+        # Executa a Crew com as tarefas de análise e a tarefa de relatório
         report_content = await run_batch_crew(
             batch_number,
             batch_analysis_tasks,
             batch_report_task,
-            document_agent,
-            reporting_agent
+            document_agent, # Agente já tem LLM
+            reporting_agent # Agente já tem LLM
         )
 
-        # 5. Coleta do conteúdo do relatório
+        # Coleta o conteúdo do relatório gerado
         if report_content:
             all_final_reports_content.append(report_content)
-        elif batch_analysis_tasks: # Se houve análise mas o relatório falhou/veio vazio
+        elif batch_analysis_tasks: # Se houve análise mas o relatório falhou
             all_final_reports_content.append(f"--- Relatório do Lote {batch_number} "
                                              f"(CONTEÚDO NÃO GERADO OU INVÁLIDO) ---")
+        # Se nem análise houve, não adiciona nada
 
-        # 6. Limpeza dos arquivos temporários DESTE lote
+        # Limpa os arquivos temporários deste lote
         print(f"  [Lote {batch_number}] Iniciando limpeza de arquivos temporários do lote...")
-        # Passa a lista específica deste lote para limpeza
         cleanup_temp_files(batch_downloaded_files, temp_dir)
         print(f"--- Lote {batch_number} Finalizado ---")
 
-    # 7. Consolidação e salvamento do relatório final após todos os lotes
+    # Salva o relatório final consolidado
     save_final_report(all_final_reports_content, report_dir)
 
-    print("\n--- Limpeza Final ---")
-    cleanup_temp_files(list(all_downloaded_files_ever), temp_dir)
     print("Processamento de todos os lotes concluído.")

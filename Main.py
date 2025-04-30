@@ -3,27 +3,29 @@ import os
 import traceback
 import math
 
+from crewai import LLM
+
 from Agents import DocumentAnalysisAgent, ReportingAgent
 from Authentication import GoogleDriveAPI
 from DataBaseManager import initialize_apis_and_db, list_drive_files
 from dotenv import load_dotenv
 
 from FolderManager import create_directories
-from LLMManager import setup_groq_llm, initialize_llm
 from ReportGeneretor import process_batches
 
 DRIVE_FOLDER_ID = "1lXQ7R5z8NGV1YGUncVDHntiOFX35r6WO"
 REPORT_DIR = "google_drive_reports"
 TEMP_DIR = "temp_drive_files"
-BATCH_SIZE = 2  # Define o número de arquivos por lote.
+BATCH_SIZE = 1  # Define o número de arquivos por lote.
 
 
-def initialize_agents(groq_chat_llm):
-    """Inicializa os agentes de análise de documentos e relatórios."""
-    print("Inicializando Agentes CrewAI...")
+def initialize_agents(llm_instance: LLM):
+    """Inicializa os agentes de análise de documentos e relatórios com o LLM fornecido."""
+    print("Inicializando Agentes CrewAI (com instância LLM centralizada)...")
     try:
-        document_agent = DocumentAnalysisAgent(llm=groq_chat_llm)
-        reporting_agent = ReportingAgent(llm=groq_chat_llm)
+        # Passa a instância LLM recebida
+        document_agent = DocumentAnalysisAgent(llm=llm_instance)
+        reporting_agent = ReportingAgent(llm=llm_instance)
         print("Agentes inicializados com sucesso.")
         return document_agent, reporting_agent
     except TypeError as e:
@@ -36,45 +38,58 @@ def initialize_agents(groq_chat_llm):
         return None, None
 
 async def main():
-    """Função principal assíncrona que orquestra o processo de análise de documentos."""
-    print("Inicializando o LLM Manager...")
-    llm_manager = setup_groq_llm() # Obtém a instância do *gerenciador* GroqLLM
-    if llm_manager is None:
-        print("Falha ao inicializar o LLM Manager. Encerrando.")
-        return
+    """Função principal assíncrona que orquestra o processo."""
+    print("Carregando variáveis de ambiente...")
+    load_dotenv()
+    google_api_key = os.getenv("GOOGLE_API_KEY")
+    if not google_api_key:
+        print("AVISO URGENTE: GOOGLE_API_KEY não encontrada!")
+        exit(1)
 
-    llm_manager, groq_chat_llm = initialize_llm()
-    if groq_chat_llm is None:
+    # --- CRIAÇÃO CENTRALIZADA DO crewai.LLM ---
+    print("Criando instância centralizada do crewai.LLM...")
+    try:
+        # Usando o nome do modelo que o LiteLLM/CrewAI deve entender
+        my_llm = LLM(
+            model="gemini/gemini-1.5-flash-latest",
+            api_key=google_api_key
+        )
+        print("Instância crewai.LLM criada com sucesso.")
+    except Exception as e:
+        print(f"Erro CRÍTICO ao criar a instância crewai.LLM: {e}")
+        traceback.print_exc()
         return
 
     create_directories(REPORT_DIR, TEMP_DIR)
 
+    print("Autenticando com Google Drive...")
     drive_api = GoogleDriveAPI()
     drive_service = drive_api.service
     if not drive_service:
-        print("Falha ao obter o serviço do Google Drive. Verifique a autenticação.")
+        print("Falha ao obter o serviço do Google Drive.")
         return
+    print("Inicializando Gerenciador de Banco de Dados (Drive)...")
     db_manager = initialize_apis_and_db(drive_service)
     if db_manager is None:
         return
 
-    document_agent, reporting_agent = initialize_agents(groq_chat_llm)
+    # Passa a instância my_llm (crewai.LLM) para inicializar os agentes
+    document_agent, reporting_agent = initialize_agents(my_llm)
     if document_agent is None or reporting_agent is None:
+        print("Falha ao inicializar os agentes. Encerrando.")
         return
 
+    print(f"Listando arquivos da pasta Google Drive ID: {DRIVE_FOLDER_ID}")
     files = list_drive_files(db_manager, DRIVE_FOLDER_ID)
     if files is None:
+        print("Falha ao listar arquivos do Google Drive.")
         return
 
     if not files:
         print("Nenhum arquivo encontrado na pasta especificada do Google Drive.")
-        # Limpar diretório temporário caso algo tenha sido baixado antes
-        # (Embora improvável se a listagem falhou)
-        # cleanup_temp_files([], TEMP_DIR) # Função de limpeza precisa ser importada ou movida
         return
     else:
         total_files = len(files)
-        # Evita divisão por zero se BATCH_SIZE for inválido
         if BATCH_SIZE <= 0:
             print("Erro: BATCH_SIZE deve ser um número positivo.")
             return
@@ -82,7 +97,6 @@ async def main():
         print(f"Encontrados {total_files} arquivos. Serão processados em {total_batches} lotes de até {BATCH_SIZE} "
               f"arquivos cada.")
 
-    # Lógica de processamento em lotes.
     print("Iniciando processamento em lotes...")
     try:
         await process_batches(
@@ -95,26 +109,18 @@ async def main():
             reporting_agent=reporting_agent,
             temp_dir=TEMP_DIR,
             report_dir=REPORT_DIR,
-            llm_manager=llm_manager
+            llm_instance=my_llm,
+            llm_manager=None # Passe None se não usar mais contagem/truncamento via API
         )
         print("Processamento em lotes concluído.")
     except Exception as e:
         print(f"Erro durante a execução de process_batches: {e}")
         traceback.print_exc()
 
+
 # --- Ponto de Entrada do Script ---
 if __name__ == "__main__":
     print("Executando script principal (Main.py)...")
-    print("Carregando variáveis de ambiente do arquivo .env (se existir)...")
-    # Carrega variáveis do arquivo .env no diretório atual ou parent.
-    # É crucial que GROQ_API_KEY esteja definida aqui ou no ambiente do sistema.
-    load_dotenv()
-    if not os.getenv("GROQ_API_KEY"):
-        print("AVISO URGENTE: A variável de ambiente GROQ_API_KEY não foi encontrada!")
-        print("Certifique-se de que ela está definida no seu ambiente ou em um arquivo .env.")
-        exit(1)
-
-    # Executa a função main assíncrona
     try:
         asyncio.run(main())
     except KeyboardInterrupt:

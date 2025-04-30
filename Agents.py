@@ -5,34 +5,37 @@ import datetime
 import os
 import traceback
 
-from crewai import Agent
+from crewai import Agent, LLM
 from typing import Any
 
 from crewai.tools import BaseTool
 
-from DocumentTools import ExtractTextTool, CountWordsTool, HuggingFaceSummarizationTool
+from DocumentTools import ExtractTextTool, CountWordsTool
 from WebTools import (ScrapeWebsiteTool, SeleniumScrapingTool, ExtractLinksToll, ExtractPageStructureTool,
                       ClickAndScrapeTool, SimulateMouseMovementTool, SimulateScrollTool, GetElementAttributesTool,
                       SendToGoogleAnalyticsTool, CrawlAndScrapeSiteTool)
 
+
 class DocumentAnalysisAgent(Agent):
     """
     Responsável por extrair informações concisas dos documentos: contagem de palavras e resumos.
-    Utiliza ferramentas específicas para extração, contagem e sumarização.
+    Utiliza ferramentas para extração e contagem, e seu próprio LLM para sumarização.
     """
     def __init__(self, llm: Any):
         super().__init__(
             role="Concise Document Analyst",
-            goal="Extract information from various document types and prepare them for analysis.",
-            backstory="I am a meticulous document analyst, skilled in extracting key information from a wide range of "
-                      "document formats. My expertise lies in preparing documents for in-depth analysis.",
+            goal="Extract key information (like word count) from document content using tools, "
+                 "and generate a concise summary using your own reasoning capabilities. "
+                 "Prepare the structured data for reporting.",
+            backstory="I am a meticulous document analyst. I use tools to extract text and count "
+                      "words, and then apply my language understanding to summarize the core message efficiently. "
+                      "My goal is to provide structured, actionable insights from documents.",
             tools=[
                 ExtractTextTool(),
                 CountWordsTool(),
-                HuggingFaceSummarizationTool()
             ],
             memory=False,
-            verbose=True,
+            verbose=False,
             llm=llm
         )
 
@@ -44,13 +47,14 @@ class DataMiningAgent(Agent):
         super().__init__(
             role="Data Mining Expert",
             goal="Identify patterns, trends, and key metrics within the extracted data.",
-            backstory="I am a seasoned data mining expert with a keen eye for detail. My mission is to uncover hidden "
+            backstory="I am a seasoned data mining expert with a keen eye for detail. "
+                      "My mission is to uncover hidden "
                       "patterns and trends within complex datasets, providing valuable insights.",
             tools=[
                 CountWordsTool()
             ],
             memory=True,
-            verbose=True,
+            verbose=False,
             llm=llm
         )
 
@@ -85,15 +89,17 @@ class GenerateReportTool(BaseTool):
                 f.write(f"Document Analysis Report - {timestamp}\n")
                 f.write("========================================\n\n")
                 for file_key, results in analysis_results.items():
-                    # Assume que file_key pode ser o nome do arquivo ou um identificador
-                    f.write(f"File: {file_key}\n")
-                    # Verifica se 'results' é um dicionário antes de usar .get()
+                    f.write(f"File: {str(file_key)}\n")
                     if isinstance(results, dict):
-                        f.write(f"  Word Count: {results.get('word_count', 'N/A')}\n")
-                        f.write(f"  Summary: {results.get('summary', 'N/A')}\n")
+                        # Converte explicitamente para string
+                        word_count_str = str(results.get('word_count', 'N/A'))
+                        summary_str = str(results.get('summary', 'N/A'))
+                        f.write(f"  Word Count: {word_count_str}\n")
+                        f.write(f"  Summary: {summary_str}\n")
                     else:
-                        # Se o resultado não for um dicionário (ex: string de erro da CrewAI)
-                        f.write(f"  Analysis Result: {results}\n")
+                        # Converte explicitamente para string
+                        analysis_result_str = str(results)
+                        f.write(f"  Analysis Result: {analysis_result_str}\n")
                     f.write("-" * 40 + "\n\n")
             print(f"Report saved to: {report_path}")
             return report_path
@@ -106,21 +112,22 @@ class GenerateReportTool(BaseTool):
 
 class ReportingAgent(Agent):
     """
-    Agente para gerar relatórios (resumos e contagens).
+    Agente para consolidar análises e gerar relatórios em Markdown.
     """
     def __init__(self, llm: Any):
         super().__init__(
             role="Document Analysis Consolidator",
-            goal="Consolidate analysis results (summaries and word counts) from multiple documents and generate a "
-                 "cohesive report.",
-            backstory="I specialize in synthesizing information from multiple document analyses. I take summaries and "
-                      "word counts and organize them into a clear and informative final report, highlighting the key "
-                      "findings from each document and providing an overview.",
+            goal="Consolidate analysis results (summaries and word counts) from multiple documents "
+                 "(provided as context from previous tasks) and generate a cohesive Markdown report.",
+            backstory="I specialize in synthesizing information from multiple document analyses. "
+                      "I take the structured results (summaries, word counts) from previous steps and "
+                      "organize them into a clear, well-formatted final Markdown report, "
+                      "highlighting the key findings from each document.",
             tools=[
-                GenerateReportTool()
+                GenerateReportTool()  # Gera o relatório em .txt
             ],
-            memory=True,
-            verbose=True,
+            memory=False,
+            verbose=False,
             llm=llm
         )
 
@@ -145,7 +152,7 @@ class WebScrapingAgent(Agent):
                 )
             ],
             memory=True,
-            verbose=True,
+            verbose=False,
             llm=llm
         )
 
@@ -168,7 +175,7 @@ class AdvancedWebScrapingAgent(Agent):
                 )
             ],
             memory=True,
-            verbose=True,
+            verbose=False,
             llm=llm
         )
 
@@ -197,7 +204,7 @@ class AdvancedWebResearchAgent(Agent):
                 )
             ],
             memory=True,
-            verbose=True,
+            verbose=False,
             llm=llm
         )
 
@@ -240,7 +247,7 @@ class BehaviorTrackingAgent(Agent):
                 )
             ],
             memory=True,
-            verbose=True,
+            verbose=False,
             llm=llm
         )
 
@@ -262,7 +269,7 @@ class AnalyticsReportingAgent(Agent):
                 )
             ],
             memory=True,
-            verbose=True,
+            verbose=False,
             llm = llm
         )
 
@@ -296,6 +303,6 @@ class SiteCrawlerAgent(Agent):
                 )
             ],
             memory=True,
-            verbose=True,
+            verbose=False,
             llm=llm
         )

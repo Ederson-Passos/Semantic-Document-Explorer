@@ -1,208 +1,119 @@
 """
 Define as tarefas que cada agente executará e orquestra o fluxo de trabalho.
 """
-from typing import List, Optional
+from typing import List, Any
 
 from crewai import Task
-from crewai.tools import BaseTool
 
 from Agents import (
     DocumentAnalysisAgent,
     DataMiningAgent,
-    ReportingAgent,
-    FileManagementAgent,
-    ExtractTextTool,
-    CountWordsTool,
-    FileSummaryTool,
-    ListFilesTool,
-    CopyFileTool
+    ReportingAgent
 )
-from DocumentTools import MoveFileTool
-from ReportGeneretor import GenerateReportTool
 
 
-def create_document_analysis_tasks(file_path: str) -> List[Task]:
-    # Instancie as ferramentas
-    extract_text_tool = ExtractTextTool(
-        name="extract_text_from_file",
-        description="Extracts text content from a file. Supports .pdf, .docx, .txt, .xlsx, .pptx, .doc"
-    )
-    count_words_tool = CountWordsTool(
-        name="count_words",
-        description="Counts the number of words in a given text."
-    )
-    file_summary_tool = FileSummaryTool(
-        name="summarize_file_content",
-        description="Provides a brief summary of the content of a file."
-    )
+def create_document_analysis_tasks(file_path: str, llm: Any) -> List[Task]:
+    """
+    Cria tarefas para extrair, contar palavras e resumir um documento usando o DocumentAnalysisAgent.
+    Args:
+        file_path (str): O caminho para o arquivo a ser analisado.
+        llm (Any): A instância do LLM a ser usada pelo agente.
+    Returns:
+        List[Task]: Uma lista contendo a tarefa de análise do documento.
+    """
+    # Instancie o agente passando o LLM
+    document_analyzer = DocumentAnalysisAgent(llm=llm)
 
-    # Instancie o agente com as ferramentas (instâncias)
-    document_analyzer = DocumentAnalysisAgent()
-
-    # Task auxiliar para encapsular o file_path
-    file_path_context_task = Task(
-        description="Contexto: Caminho do arquivo para análise.",
-        agent=None,
-        tools=[],  # Lista vazia de ferramentas (para Task de contexto)
-        context=[Task(description="Dados de contexto", agent=None, tools=[], expected_output="O caminho do arquivo.")],
-        expected_output="O caminho do arquivo."
-    )
-
-    return [
-        file_path_context_task,
-        Task(
-            description=f"Extrair o conteúdo completo do documento localizado em '{file_path}'.",
-            agent=document_analyzer,
-            tools=[extract_text_tool],
-            context=[file_path_context_task],
-            expected_output="O conteúdo completo do arquivo em formato de texto."
+    # Tarefa única combinando extração, contagem e resumo.
+    analysis_task = Task(
+        description=(
+            f"1. Use a ferramenta 'extract_text_from_file' para extrair o conteúdo completo "
+            f"do documento em: '{file_path}'.\n"
+            f"2. Use a ferramenta 'count_words' para contar o número total de palavras no texto extraído.\n"
+            f"3. Use suas capacidades de raciocínio (LLM) para gerar um resumo conciso "
+            f"(1-2 parágrafos, máx 500 palavras) da mensagem principal do documento.\n"
+            "Certifique-se de que o resultado final seja um dicionário Python estruturado."
         ),
-        Task(
-            description=f"Contar o número total de palavras no texto extraído de '{file_path}'.",
-            agent=document_analyzer,
-            tools=[count_words_tool],
-            context=[file_path_context_task],
-            expected_output="O número total de palavras no texto extraído."
-        ),
-        Task(
-            description=f"Fornecer um resumo conciso do documento localizado em '{file_path}'. Almejar um resumo de no máximo 500 palavras.",
-            agent=document_analyzer,
-            tools=[file_summary_tool],
-            context=[file_path_context_task],
-            expected_output="Um resumo conciso do conteúdo do arquivo com no máximo 500 palavras."
+        agent=document_analyzer,
+        expected_output=(
+            "Um dicionário Python contendo:\n"
+            "- 'file_path': O caminho original do arquivo analisado (string).\n"
+            "- 'full_text': O conteúdo completo do texto extraído (string).\n"
+            "- 'word_count': A contagem total de palavras (integer).\n"
+            "- 'summary': Um resumo conciso do documento gerado por você (string)."
         )
-    ]
-
-
-def create_data_mining_tasks() -> List[Task]:
-    # Instancie as ferramentas
-    count_words_tool = CountWordsTool(
-        name="count_words",
-        description="Counts the number of words in a given text."
     )
-    # Instancie o agente com as ferramentas (instâncias)
-    data_mining_agent = DataMiningAgent()
-    return [
-        Task(
-            description="Analisar as contagens de palavras dos documentos para identificar tendências ou anomalias.",
-            agent=data_mining_agent,
-            tools=[count_words_tool],  # Passa a INSTÂNCIA da ferramenta para a Task
-            expected_output="Análise de tendências e anomalias nas contagens de palavras."
-        )
-        # Adicionar mais tarefas de mineração de dados conforme necessário
-    ]
+    return [analysis_task]
 
 
-def create_reporting_tasks(report_directory: str = "reports") -> List[Task]:
-    # Instancie as ferramentas
-    generate_report_tool = GenerateReportTool(
-        name = "generate_report",
-    description = "Generates a report summarizing the key findings from the document analysis."
-    )
-    list_files_tool = ListFilesTool(
-        name="list_files_in_directory",
-        description="Lists all files in a given directory."
-    )
-    copy_file_tool = CopyFileTool(
-        name="copy_file",
-        description="Copies a file from source to destination."
-    )
+def create_data_mining_tasks(llm: Any) -> List[Task]:
+    """
+    Cria tarefas para analisar os resultados das análises de documentos (passados como contexto).
+    Args:
+        llm (Any): A instância do LLM a ser usada pelo agente.
+    Returns:
+        List[Task]: Uma lista contendo a tarefa de mineração de dados.
+    """
+    # Instancie o agente passando o LLM
+    data_mining_agent = DataMiningAgent(llm=llm)
 
-    # Instancie o agente com as ferramentas (instâncias)
-    reporting_agent = ReportingAgent()
-
-    # Task auxiliar para encapsular o report_directory
-    report_directory_context_task = Task(
-        description="Contexto: Diretório para salvar os relatórios.",
-        agent=None,
-        tools=[],
-        context=[Task(description="Dados de contexto", agent=None, tools=[], expected_output="O diretório para salvar os relatórios.")],
-        expected_output="O diretório para salvar os relatórios."
-    )
-
-    # Determine the type of generate_report_tool and handle it appropriately
-    generate_report_tools: List[Optional[BaseTool]] = []
-    if callable(generate_report_tool):
-        # If it's a function, it's not a BaseTool instance, so we don't add it directly
-        pass  # Or handle it differently if needed
-    elif isinstance(generate_report_tool, BaseTool):
-        generate_report_tools.append(generate_report_tool)
-
-    return [
-        report_directory_context_task,
-        Task(
-            description=f"Gerar um relatório resumindo as principais descobertas da análise de documentos e mineração de dados. Salvar o relatório no diretório '{report_directory}'.",
-            agent=reporting_agent,
-            tools=generate_report_tools + [list_files_tool, copy_file_tool],  # Passa as INSTÂNCIAS das ferramentas
-            context=[report_directory_context_task],
-            expected_output="Relatório gerado no diretório especificado."
+    # Tarefa para analisar resultados agregados (passados via contexto pela Crew)
+    mining_task = Task(
+        description=(
+            "Analise os resultados coletados (contagens de palavras, resumos) das tarefas anteriores de "
+            "análise de documentos (fornecidos como contexto). "
+            "Identifique quaisquer tendências, padrões, anomalias ou métricas chave notáveis entre os documentos. "
+            "Concentre-se em comparar contagens de palavras e resumir temas comuns ou discrepâncias "
+            "encontradas nos resumos. "
+            "Use a ferramenta 'count_words' se precisar recontar ou verificar partes específicas "
+            "do texto no contexto."
         ),
-        Task(
-            description=f"Listar todos os arquivos no diretório '{report_directory}' para garantir que o relatório foi salvo corretamente.",
-            agent=reporting_agent,
-            tools=[list_files_tool],  # Passa a INSTÂNCIA da ferramenta
-            context=[report_directory_context_task],
-            expected_output="Lista de arquivos no diretório do relatório."
-        ),
-        Task(
-            description=f"Copiar o relatório gerado para um local de backup.",
-            agent=reporting_agent,
-            tools=[copy_file_tool],  # Passa a INSTÂNCIA da ferramenta
-            context=[report_directory_context_task],
-            expected_output="Relatório copiado para o local de backup."
+        agent=data_mining_agent,
+        expected_output=(
+            "Um relatório de análise textual detalhando:\n"
+            "- Tendências ou padrões observados nas contagens de palavras entre documentos.\n"
+            "- Anomalias ou outliers nas contagens de palavras.\n"
+            "- Temas comuns ou descobertas chave sintetizadas a partir dos resumos dos documentos.\n"
+            "- Quaisquer outras métricas ou insights relevantes derivados dos dados combinados."
         )
-        # Adicionar mais tarefas de relatório conforme necessário
-    ]
-
-
-def create_file_management_tasks(
-        source_directory: str, destination_directory: str
-) -> List[Task]:
-    # Instancie as ferramentas
-    list_files_tool = ListFilesTool(
-        name="list_files_in_directory",
-        description="Lists all files in a given directory."
     )
-    move_file_tool = MoveFileTool(
-        name="move_file",
-        description="Moves a file from source to destination."
-    )
+    return [mining_task]
 
-    # Instancie o agente com as ferramentas (instâncias)
-    file_management_agent = FileManagementAgent()
 
-    # Tasks auxiliares para os diretórios de origem e destino
-    source_directory_context_task = Task(
-        description="Contexto: Diretório de origem dos arquivos.",
-        agent=None,
-        tools=[],
-        context=[Task(description="Dados de contexto", agent=None, tools=[], expected_output="O diretório de origem dos arquivos.")],
-        expected_output="O diretório de origem dos arquivos."
-    )
+def create_reporting_tasks(llm: Any, report_directory: str = "reports") -> List[Task]:
+    """
+    Cria tarefas para consolidar resultados e instruir o ReportingAgent a salvar um relatório.
 
-    destination_directory_context_task = Task(
-        description="Contexto: Diretório de destino para mover os arquivos.",
-        agent=None,
-        tools=[],
-        context=[Task(description="Dados de contexto", agent=None, tools=[], expected_output="O diretório de destino para mover os arquivos.")],
-        expected_output="O diretório de destino para mover os arquivos."
-    )
+    Args:
+        llm (Any): A instância do LLM a ser usada pelo agente.
+        report_directory (str): O diretório onde o relatório deve ser salvo.
 
-    return [
-        source_directory_context_task,
-        destination_directory_context_task,
-        Task(
-            description=f"Listar todos os arquivos no diretório de origem: '{source_directory}'.",
-            agent=file_management_agent,
-            tools=[list_files_tool],
-            expected_output="Lista de arquivos no diretório de origem."
+    Returns:
+        List[Task]: Uma lista contendo a tarefa de geração de relatório.
+    """
+    # Instancie o agente passando o LLM
+    reporting_agent = ReportingAgent(llm=llm)
+
+    # Tarefa para gerar e salvar o relatório consolidado
+    generate_save_report_task = Task(
+        description=(
+            f"Consolide TODAS as descobertas das tarefas anteriores de análise de documentos e mineração "
+            f"de dados (fornecidas como contexto). "
+            f"Estruture essas descobertas em um relatório final coeso. O relatório deve incluir as informações "
+            f"de cada arquivo (contagem de palavras, resumo) e a análise de mineração de dados.\n"
+            f"Após consolidar o conteúdo do relatório, use a ferramenta 'save_analysis_report' para salvar este "
+            f"relatório consolidado como um arquivo de texto. "
+            f"O input para a ferramenta 'save_analysis_report' deve ser um dicionário Python contendo os "
+            f"resultados consolidados (você pode precisar estruturá-lo adequadamente, por exemplo, com chaves "
+            f"sendo nomes de arquivos ou 'mining_analysis'). "
+            f"Certifique-se de que o diretório para salvar seja '{report_directory}'."
         ),
-        Task(
-            description=f"Mover todos os arquivos .txt de '{source_directory}' para '{destination_directory}'.",
-            agent=file_management_agent,
-            tools=[move_file_tool],
-            context=[source_directory_context_task, destination_directory_context_task],
-            expected_output="Arquivos movidos do diretório de origem para o diretório de destino."
+        agent=reporting_agent,
+        expected_output=(
+            f"A confirmação de que o relatório final consolidado foi gerado com sucesso e salvo como "
+            f"um arquivo de texto "
+            f"usando a ferramenta 'save_analysis_report' no diretório '{report_directory}'. "
+            f"Inclua na sua resposta final o caminho completo do arquivo salvo retornado pela ferramenta."
         )
-        # Adicionar mais tarefas de gerenciamento de arquivos conforme necessário
-    ]
+    )
+    return [generate_save_report_task]
