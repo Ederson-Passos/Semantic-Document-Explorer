@@ -60,18 +60,17 @@ class GroqLLM:
     def truncate_content(self, content: str, current_tokens: int, max_tokens: int, batch_number: int) -> str:
         """
         Trunca o conteúdo se a contagem de tokens exceder o máximo permitido.
-
         Args:
             content: O texto completo do arquivo.
             current_tokens: A contagem de tokens já calculada para o conteúdo.
             max_tokens: O número máximo de tokens que a LLM pode processar.
             batch_number: O número do lote atual (para fins de log).
-
         Returns:
             O conteúdo original ou uma versão truncada com um aviso.
         """
         if current_tokens > max_tokens:
-            print(f"      [Lote {batch_number}] ALERTA: Conteúdo excedeu o limite de tokens ({current_tokens} > {max_tokens}). Truncando...")
+            print(f"      [Lote {batch_number}] ALERTA: Conteúdo excedeu o limite de tokens "
+                  f"({current_tokens} > {max_tokens}). Truncando...")
 
             # --- Estratégia de Truncamento ---
             if self.tokenizer:

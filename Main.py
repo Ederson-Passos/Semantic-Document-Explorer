@@ -28,7 +28,6 @@ def initialize_agents(groq_chat_llm):
         return document_agent, reporting_agent
     except TypeError as e:
         print(f"Erro de Tipo ao inicializar agentes: {e}")
-        print("Verifique se as classes DocumentAnalysisAgent e ReportingAgent em Agents.py foram atualizadas para aceitar o argumento 'llm'.")
         traceback.print_exc()
         return None, None
     except Exception as e:
