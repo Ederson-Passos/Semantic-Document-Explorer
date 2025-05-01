@@ -5,8 +5,8 @@ import datetime
 import os
 import traceback
 
-from crewai import Agent, LLM
-from typing import Any
+from crewai import Agent
+from typing import Any, Dict
 
 from crewai.tools import BaseTool
 
@@ -60,51 +60,77 @@ class DataMiningAgent(Agent):
 
 class GenerateReportTool(BaseTool):
     name: str = "save_analysis_report"
-    description: str = ("Saves the provided analysis results dictionary to a text file. "
-                        "Input should be a dictionary where keys are filenames and values are analysis results.")
+    description: str = (
+        "Saves the provided analysis results dictionary to a text file in a specified directory. "
+        "Input should be the analysis results (dict) and the target directory path (str) for the report."
+    )
 
-    def _run(self, analysis_results: dict, report_directory: str = "reports", filename_prefix: str = "analysis") -> str:
+    def _run(self, analysis_results: Dict[str, Any], report_directory: str = "reports") -> str:
         """
-        Saves the analysis results dictionary to a file.
+        Saves the analysis results dictionary to a file within the specified directory.
         Args:
             analysis_results (dict): Dictionary containing analysis results.
-            report_directory (str): Directory to save the report.
-            filename_prefix (str): Prefix for the report filename.
+            report_directory (str): Directory to save the report. Defaults to 'reports'.
         Returns:
-            str: Path to the saved report file.
+            str: Path to the saved report file or an error message.
         """
         if not isinstance(analysis_results, dict):
-            return "Error: Input must be a dictionary."
+            return "Error: Input 'analysis_results' must be a dictionary."
+        if not isinstance(report_directory, str) or not report_directory:
+            return "Error: Input 'report_directory' must be a non-empty string."
 
         try:
-            # Cria o diretório especificado pela variável 'report_directory'.
-            # O argumento 'exist_ok=True' garante que nenhum erro será lançado se o diretório já existir.
+            # Cria o diretório especificado. Se for uma subpasta, ele criará as pastas pais também.
             os.makedirs(report_directory, exist_ok=True)
-            # Obtém a data e hora atuais e formata como uma string no formato "AnoMesDia_HoraMinutoSegundo".
             timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-            report_filename = f"{filename_prefix}_report_{timestamp}.txt"  # Cria o nome do arquivo de relatório.
-            report_path = os.path.join(report_directory, report_filename)  # Constrói o caminho.
+            report_filename = f"batch_analysis_report_{timestamp}.txt"
+            report_path = os.path.join(report_directory, report_filename)
 
             with open(report_path, "w", encoding="utf-8") as f:
-                f.write(f"Document Analysis Report - {timestamp}\n")
+                f.write(f"Document Analysis Report - Generated: {timestamp}\n")
+                f.write(f"Saved in directory: {report_directory}\n")
                 f.write("========================================\n\n")
-                for file_key, results in analysis_results.items():
-                    f.write(f"File: {str(file_key)}\n")
-                    if isinstance(results, dict):
-                        # Converte explicitamente para string
-                        word_count_str = str(results.get('word_count', 'N/A'))
-                        summary_str = str(results.get('summary', 'N/A'))
-                        f.write(f"  Word Count: {word_count_str}\n")
-                        f.write(f"  Summary: {summary_str}\n")
-                    else:
-                        # Converte explicitamente para string
-                        analysis_result_str = str(results)
-                        f.write(f"  Analysis Result: {analysis_result_str}\n")
-                    f.write("-" * 40 + "\n\n")
-            print(f"Report saved to: {report_path}")
-            return report_path
+                if isinstance(analysis_results, dict):
+                    for key, results in analysis_results.items():
+                        f.write(f"--- Entry: {str(key)} ---\n")
+                        if isinstance(results, dict):
+                            # Tenta extrair campos comuns da análise de documento
+                            file_path_str = str(results.get('file_path', 'N/A'))
+                            word_count_str = str(results.get('word_count', 'N/A'))
+                            summary_str = str(results.get('summary', 'N/A'))
+                            full_text_preview = str(results.get('full_text', ''))[:100] # Preview
+                            f.write(f"  File Path Hint: {file_path_str}\n")
+                            f.write(f"  Word Count: {word_count_str}\n")
+                            f.write(f"  Summary: {summary_str}\n")
+                            if full_text_preview:
+                                f.write(f"  Text Preview: {full_text_preview}...\n")
+                            # Adiciona outros campos se existirem
+                            other_keys = {k: v for k, v in results.items() if k not in ['file_path',
+                                                                                        'word_count',
+                                                                                        'summary',
+                                                                                        'full_text']}
+                            if other_keys:
+                                f.write(f"  Other Data: {str(other_keys)}\n")
+                        else:
+                            # Caso o valor não seja um dicionário
+                            f.write(f"  Result: {str(results)}\n")
+                        f.write("\n")
+                else:
+                    f.write(f"Raw Results Data:\n{str(analysis_results)}\n")
+
+                f.write("========================================\n")
+                f.write(f"End of Report - {timestamp}\n")
+
+            print(f"Report saved by tool to: {report_path}")
+            # Retorna o caminho completo para a task
+            return f"Report successfully saved to: {report_path}"
+        except OSError as e:
+            error_message = f"Error creating directory or saving file '{report_path}': {e}"
+            print(error_message)
+            traceback.print_exc()
+            return error_message
         except Exception as e:
-            error_message = f"Error saving report: {e}"
+            error_message = f"Unexpected error saving report to '{report_directory}': {e}"
             print(error_message)
             traceback.print_exc()
             return error_message
@@ -112,22 +138,24 @@ class GenerateReportTool(BaseTool):
 
 class ReportingAgent(Agent):
     """
-    Agente para consolidar análises e gerar relatórios em Markdown.
+    Agente para consolidar análises e gerar relatórios em TXT usando uma ferramenta.
     """
     def __init__(self, llm: Any):
         super().__init__(
-            role="Document Analysis Consolidator",
-            goal="Consolidate analysis results (summaries and word counts) from multiple documents "
-                 "(provided as context from previous tasks) and generate a cohesive Markdown report.",
+            role="Document Analysis Consolidator and Reporter",
+            goal="Consolidate analysis results (summaries, word counts, etc.) from multiple documents "
+                 "(provided as context from previous tasks), structure them into a coherent dictionary, "
+                 "and use the 'save_analysis_report' tool to save this dictionary as a text file "
+                 "in the specific directory provided in the task instructions.",
             backstory="I specialize in synthesizing information from multiple document analyses. "
-                      "I take the structured results (summaries, word counts) from previous steps and "
-                      "organize them into a clear, well-formatted final Markdown report, "
-                      "highlighting the key findings from each document.",
+                      "I take the structured results from previous steps, organize them into a Python dictionary, "
+                      "and then use a dedicated tool to save this data persistently as a text report "
+                      "in the designated location.",
             tools=[
-                GenerateReportTool()  # Gera o relatório em .txt
+                GenerateReportTool() # Ferramenta para salvar em .txt
             ],
             memory=False,
-            verbose=False,
+            verbose=False, # Mantenha False para produção
             llm=llm
         )
 

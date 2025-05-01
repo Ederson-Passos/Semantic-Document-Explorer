@@ -2,9 +2,7 @@
 Define as tarefas que cada agente executará e orquestra o fluxo de trabalho.
 """
 from typing import List, Any
-
 from crewai import Task
-
 from Agents import (
     DocumentAnalysisAgent,
     DataMiningAgent,
@@ -14,33 +12,29 @@ from Agents import (
 
 def create_document_analysis_tasks(file_path: str, llm: Any) -> List[Task]:
     """
-    Cria tarefas para extrair, contar palavras e resumir um documento usando o DocumentAnalysisAgent.
+    Cria tarefas para contar palavras e resumir o CONTEÚDO FORNECIDO de um documento.
     Args:
-        file_path (str): O caminho para o arquivo a ser analisado.
+        file_path (str): O caminho original do arquivo (usado para referência no output).
         llm (Any): A instância do LLM a ser usada pelo agente.
     Returns:
         List[Task]: Uma lista contendo a tarefa de análise do documento.
     """
-    # Instancie o agente passando o LLM
     document_analyzer = DocumentAnalysisAgent(llm=llm)
 
-    # Tarefa única combinando extração, contagem e resumo.
     analysis_task = Task(
         description=(
-            f"1. Use a ferramenta 'extract_text_from_file' para extrair o conteúdo completo "
-            f"do documento em: '{file_path}'.\n"
-            f"2. Use a ferramenta 'count_words' para contar o número total de palavras no texto extraído.\n"
-            f"3. Use suas capacidades de raciocínio (LLM) para gerar um resumo conciso "
-            f"(1-2 parágrafos, máx 500 palavras) da mensagem principal do documento.\n"
+            f"Analise o conteúdo do documento fornecido (originalmente de '{file_path}').\n"
+            f"1. Use a ferramenta 'count_words' para contar o número total de palavras no texto fornecido.\n"
+            f"2. Use suas capacidades de raciocínio (LLM) para gerar um resumo conciso "
+            f"(5-10 linhas) da mensagem principal do texto fornecido.\n"
             "Certifique-se de que o resultado final seja um dicionário Python estruturado."
         ),
         agent=document_analyzer,
         expected_output=(
             "Um dicionário Python contendo:\n"
-            "- 'file_path': O caminho original do arquivo analisado (string).\n"
-            "- 'full_text': O conteúdo completo do texto extraído (string).\n"
-            "- 'word_count': A contagem total de palavras (integer).\n"
-            "- 'summary': Um resumo conciso do documento gerado por você (string)."
+            f"- 'file_path': O caminho original do arquivo '{file_path}' (string).\n"
+            "- 'word_count': A contagem total de palavras do texto fornecido (integer ou string de erro).\n"
+            "- 'summary': Um resumo conciso do texto fornecido ou uma mensagem de erro se a análise falhou (string)."
         )
     )
     return [analysis_task]
@@ -80,14 +74,12 @@ def create_data_mining_tasks(llm: Any) -> List[Task]:
     return [mining_task]
 
 
-def create_reporting_tasks(llm: Any, report_directory: str = "reports") -> List[Task]:
+def create_reporting_tasks(llm: Any) -> List[Task]:
     """
     Cria tarefas para consolidar resultados e instruir o ReportingAgent a salvar um relatório.
-
+    O diretório específico será injetado dinamicamente na descrição/expected_output.
     Args:
         llm (Any): A instância do LLM a ser usada pelo agente.
-        report_directory (str): O diretório onde o relatório deve ser salvo.
-
     Returns:
         List[Task]: Uma lista contendo a tarefa de geração de relatório.
     """
@@ -97,23 +89,30 @@ def create_reporting_tasks(llm: Any, report_directory: str = "reports") -> List[
     # Tarefa para gerar e salvar o relatório consolidado
     generate_save_report_task = Task(
         description=(
-            f"Consolide TODAS as descobertas das tarefas anteriores de análise de documentos e mineração "
-            f"de dados (fornecidas como contexto). "
-            f"Estruture essas descobertas em um relatório final coeso. O relatório deve incluir as informações "
-            f"de cada arquivo (contagem de palavras, resumo) e a análise de mineração de dados.\n"
-            f"Após consolidar o conteúdo do relatório, use a ferramenta 'save_analysis_report' para salvar este "
-            f"relatório consolidado como um arquivo de texto. "
-            f"O input para a ferramenta 'save_analysis_report' deve ser um dicionário Python contendo os "
-            f"resultados consolidados (você pode precisar estruturá-lo adequadamente, por exemplo, com chaves "
-            f"sendo nomes de arquivos ou 'mining_analysis'). "
-            f"Certifique-se de que o diretório para salvar seja '{report_directory}'."
+            "Consolide TODAS as descobertas das tarefas anteriores de análise de documentos "
+            "(fornecidas como contexto). Para cada documento analisado, extraia as informações relevantes "
+            "(como nome do arquivo implícito na descrição da tarefa de análise, contagem de palavras e resumo) "
+            "do resultado da respectiva tarefa de análise.\n"
+            "IMPORTANTE: Ao processar os resumos ('summary') de cada tarefa de análise, certifique-se de que "
+            "eles mantenham a formatação de parágrafos original. Se um resumo parecer um bloco único, "
+            "tente adicionar quebras de parágrafo (duplo newline '\\n\\n') onde fizer sentido semanticamente.\n"
+            "Estruture todas essas descobertas consolidadas em um único dicionário Python. As chaves podem ser "
+            "nomes de arquivos ou identificadores, e os valores devem ser os dicionários de resultados de cada análise "
+            "(contendo 'file_path', 'word_count', 'summary' formatado, etc.).\n"
+            "Finalmente, use a ferramenta 'save_analysis_report' para salvar este dicionário consolidado.\n"
+            "Ao usar a ferramenta 'save_analysis_report':\n"
+            "1. O primeiro argumento DEVE ser o dicionário Python com os resultados consolidados e formatados.\n"
+            "2. O segundo argumento, chamado 'report_directory', DEVE ser a seguinte string de caminho: "
+            "'{specific_report_dir_placeholder}'." # Placeholder para o caminho específico
         ),
         agent=reporting_agent,
         expected_output=(
-            f"A confirmação de que o relatório final consolidado foi gerado com sucesso e salvo como "
-            f"um arquivo de texto "
-            f"usando a ferramenta 'save_analysis_report' no diretório '{report_directory}'. "
-            f"Inclua na sua resposta final o caminho completo do arquivo salvo retornado pela ferramenta."
+            "A confirmação textual retornada pela ferramenta 'save_analysis_report' indicando se o relatório "
+            "foi salvo com sucesso e o caminho completo do arquivo .txt gerado.\n"
+            "Exemplo de sucesso: 'Report successfully saved to: "
+            "google_drive_reports/run_.../batch_analysis_report_....txt'\n"
+            "A resposta DEVE incluir o caminho completo do arquivo salvo retornado pela ferramenta, "
+            "que deve estar dentro do diretório: '{specific_report_dir_placeholder}'."
         )
     )
     return [generate_save_report_task]

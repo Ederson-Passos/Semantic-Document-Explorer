@@ -4,9 +4,11 @@ Contém a lógica para gerar relatórios por lotes de arquivos.
 import asyncio
 import datetime
 import os
+import re
 import traceback
 import threading
 import fitz
+import openpyxl
 from typing import Dict, Any, Optional, List
 from crewai import Crew, Process, Task, Agent, LLM
 from DataBaseManager import DataBaseManager
@@ -83,12 +85,17 @@ def extract_and_truncate_content_simple(
         max_chars: int = 100000 # Defina um limite de caracteres razoável
 ) -> tuple[str, int]:
     """
-    Extrai o conteúdo do arquivo e trunca por CARACTERES se necessário (SEM API).
+    Extrai o conteúdo do arquivo e trunca por caracteres se necessário (SEM API).
     Retorna o conteúdo (possivelmente truncado) e a contagem de PALAVRAS.
     """
     file_content = ""
     extraction_error = None
     word_count = 0
+    if not os.path.exists(actual_downloaded_path):
+        error_msg = f"ERRO CRÍTICO: Arquivo não encontrado em '{actual_downloaded_path}' no momento da extração."
+        print(f"      [Lote {batch_number}] {error_msg}")
+        return f"ERRO DURANTE A EXTRAÇÃO: {error_msg}", 0
+
     try:
         if actual_downloaded_path.lower().endswith(".pdf"):
             try:
@@ -98,6 +105,21 @@ def extract_and_truncate_content_simple(
             except Exception as pdf_error:
                 extraction_error = f"Erro ao extrair texto do PDF: {pdf_error}"
                 print(f"      [Lote {batch_number}] ERRO ao extrair texto do PDF {actual_filename}: {pdf_error}")
+        elif actual_downloaded_path.lower().endswith(".xlsx"):
+            try:
+                workbook = openpyxl.load_workbook(actual_downloaded_path, read_only=True, data_only=True)
+                text_parts = []
+                for sheet_name in workbook.sheetnames:
+                    sheet = workbook[sheet_name]
+                    for row in sheet.iter_rows():
+                        for cell in row:
+                            if cell.value is not None:
+                                text_parts.append(str(cell.value))
+                file_content = "\n".join(text_parts) # Junta o texto das células
+                print(f"      [Lote {batch_number}] Extraído texto do XLSX: {actual_filename}")
+            except Exception as xlsx_error:
+                extraction_error = f"Erro ao extrair texto do XLSX: {xlsx_error}"
+                print(f"      [Lote {batch_number}] ERRO ao extrair texto do XLSX {actual_filename}: {xlsx_error}")
         else: # Assume outros formatos como texto.
             try:
                 # Tenta detectar a codificação, com fallback para utf-8 ignore
@@ -199,12 +221,13 @@ async def process_file_in_batch(
                     analysis_task.description = (
                         f"Analise o seguinte conteúdo extraído do documento '{actual_filename}' "
                         f"(originalmente '{original_filename}', Lote {batch_number}). "
-                        f"O conteúdo PODE TER SIDO TRUNCADO ({word_count} palavras estimadas). "
+                        f"{'O conteúdo PODE TER SIDO TRUNCADO' if not file_content.startswith('ERRO') else 'HOUVE UM ERRO NA EXTRAÇÃO/LEITURA DO CONTEÚDO'}. "
+                        f"({word_count} palavras estimadas).\n"
                         "Sua análise DEVE focar em:\n"
-                        "1. Calcular a contagem total de palavras do texto fornecido (use a ferramenta "
-                        "'count_words' se disponível, senão estime).\n"
-                        "2. Gerar um resumo EXTREMAMENTE CONCISO do conteúdo principal em 5 a 10 linhas de texto.\n"
-                        "NÃO inclua o texto original na sua resposta final. Retorne APENAS o dicionário Python.\n"
+                        "1. Se o conteúdo NÃO começar com 'ERRO': Use a ferramenta 'count_words' para contar as palavras no texto fornecido.\n"
+                        "2. Se o conteúdo NÃO começar com 'ERRO': Gere um resumo EXTREMAMENTE CONCISO (5 a 10 linhas) do conteúdo principal.\n"
+                        "3. Se o conteúdo COMEÇAR com 'ERRO': Retorne a mensagem de erro como 'summary' e 'None' como 'word_count'.\n"
+                        "NÃO inclua o texto original na sua resposta final (exceto se for a mensagem de erro). Retorne APENAS o dicionário Python.\n"
                         f"\nCONTEÚDO PARA ANÁLISE:\n---\n{file_content}\n---"
                     )
                     print(f"      [Lote {batch_number}] Tarefa de análise para {actual_filename} criada/atualizada.")
@@ -300,10 +323,12 @@ def process_batch_results(results_from_gather: list, batch_number: int):
 def create_report_task(
         batch_number: int,
         analysis_tasks: List[Task],
-        llm_instance: LLM
+        llm_instance: LLM,
+        specific_report_dir: str
 ):
     """
-    Cria a tarefa final de relatório para um lote, usando a instância LLM fornecida.
+    Cria a tarefa final de relatório para um lote, usando a instância LLM fornecida e o diretório de relatório
+    específico.
     """
     if not analysis_tasks:
         print(f"   [Lote {batch_number}] Nenhuma tarefa de análise para incluir no relatório.")
@@ -311,34 +336,27 @@ def create_report_task(
 
     print(f"   [Lote {batch_number}] Criando tarefa de relatório com {len(analysis_tasks)} análises como contexto...")
 
-    # Usa a função de Tasks.py para criar a tarefa, passando a llm_instance
+    # Usa a função de Tasks.py para criar a tarefa base
     reporting_tasks_list = create_reporting_tasks(
-        llm=llm_instance, # Passa a instância crewai.LLM
-        report_directory="dummy_dir" # O diretório real é tratado depois
+        llm=llm_instance
     )
 
     if reporting_tasks_list:
         report_task = reporting_tasks_list[0]
         # Define o contexto da tarefa de relatório como as tarefas de análise concluídas
         report_task.context = analysis_tasks
-        # Atualiza a descrição se necessário.
-        report_task.description = (
-            f"Consolide os resultados das {len(analysis_tasks)} tarefas de análise de documentos "
-            f"fornecidas como contexto (representando o Lote {batch_number}). Para cada documento analisado, "
-            f"extraia as informações relevantes "
-            "(como nome do arquivo implícito na descrição da tarefa de análise, contagem de palavras e resumo) "
-            "do resultado da respectiva tarefa de análise. "
-            "Formate a saída como um relatório único e coeso em formato Markdown, com uma seção para cada documento."
+
+        # Injeta dinamicamente o caminho específico na descrição e expected_output
+        original_description = report_task.description
+        original_expected_output = report_task.expected_output
+
+        report_task.description = original_description.format(
+            specific_report_dir_placeholder=specific_report_dir
         )
-        report_task.expected_output=(
-            "Uma contendo o relatório completo em formato Markdown. O relatório deve ter:\n"
-            "- Um título geral (ex: '# Relatório de Análise - Lote {batch_number}').\n"
-            "- Uma seção para CADA documento analisado (use `##` ou `###` para o nome do arquivo), contendo:\n"
-            "  - O nome do arquivo (tente inferir da descrição da tarefa de análise).\n"
-            "  - A contagem de palavras encontrada (ex: `* **Contagem de palavras:** X`).\n"
-            "  - O resumo gerado (ex: `* **Resumo:** ...`).\n"
-            "- Use formatação Markdown clara."
+        report_task.expected_output = original_expected_output.format(
+            specific_report_dir_placeholder=specific_report_dir
         )
+        print(f"   [Lote {batch_number}] Tarefa de relatório criada. Diretório de destino: {specific_report_dir}")
         return report_task
     else:
         print(f"   [Lote {batch_number}] ERRO: create_reporting_tasks não retornou tarefas.")
@@ -355,7 +373,8 @@ async def run_batch_crew(
     Executa a CrewAI para um lote específico, incluindo tarefas de análise e a tarefa de relatório.
     O kickoff síncrono é executado em um thread separado.
     Return:
-        Optional[str]: O conteúdo do relatório gerado pela tarefa final (report_task), ou None se falhar.
+        Optional[str]: A string de resultado da tarefa final (report_task), que geralmente é
+                       a confirmação/erro da ferramenta de salvar, ou None se falhar.
     """
     if not analysis_tasks and not report_task:
         print(f"  [Lote {batch_number}] Nenhuma tarefa válida para executar no Crew.")
@@ -366,65 +385,89 @@ async def run_batch_crew(
           f"{'1 relatório' if report_task else 'sem relatório'})...")
 
     # Definindo os agentes que participarão.
-    agents_for_crew = [document_agent, reporting_agent]
+    # Garante que ambos os agentes estejam na lista se houver tarefas para eles
+    agents_for_crew = []
+    if analysis_tasks:
+        agents_for_crew.append(document_agent)
+    if report_task:
+        # Evita adicionar o mesmo agente duas vezes se ele fizesse as duas tarefas
+        if reporting_agent not in agents_for_crew:
+            agents_for_crew.append(reporting_agent)
+
+    if not agents_for_crew:
+        print(f"  [Lote {batch_number}] ERRO: Nenhuma tarefa ou nenhum agente definido para o Crew.")
+        return f"--- Relatório do Lote {batch_number} (ERRO: SEM AGENTES PARA CREW) ---"
+
 
     batch_crew = Crew(
         agents=agents_for_crew,
         tasks=tasks_for_crew,
-        process=Process.sequential, # Executa tarefas em ordem: primeiro análises, depois relatório
-        verbose=False,
+        process=Process.sequential, # Executa tarefas em ordem
+        verbose=False, # Manten False para menos ruído, True para debug
         memory=False
     )
 
-    final_report_content = None
+    kickoff_result_str = None
     try:
         print(f"  [Lote {batch_number}] Executando Crew.kickoff() em thread separada...")
         # O resultado da crew será o resultado da última tarefa na lista (report_task, se existir)
         kickoff_result = await asyncio.to_thread(batch_crew.kickoff)
         print(f"  [Lote {batch_number}] Execução do Crew.kickoff() concluída.")
-        # Verifica o resultado. Se report_task existia, espera-se que kickoff_result seja o conteúdo do relatório.
-        if report_task:
-            if kickoff_result and isinstance(kickoff_result, str):
-                final_report_content = kickoff_result
-                print(f"    [Lote {batch_number}] Relatório gerado com sucesso.")
-            elif kickoff_result:
-                print(f"    [Lote {batch_number}] Atenção: Resultado do kickoff não foi uma string como esperado "
-                      f"para o relatório: {type(kickoff_result)}")
-                final_report_content = (f"--- Relatório do Lote {batch_number} (FORMATO INESPERADO) "
-                                        f"---\n{str(kickoff_result)}")
-            else:
-                print(f"    [Lote {batch_number}] Atenção: Relatório do lote veio vazio ou nulo após kickoff.")
-                final_report_content = f"--- Relatório do Lote {batch_number} (FALHA OU VAZIO) ---"
+
+        # Converte o resultado para string para tratamento uniforme
+        if kickoff_result is not None:
+            kickoff_result_str = str(kickoff_result)
         else:
-            print(f"    [Lote {batch_number}] Crew executada apenas para análise (sem tarefa de relatório). "
-                  f"Resultado do kickoff: {kickoff_result}")
+            kickoff_result_str = f"--- Relatório do Lote {batch_number} (RETORNO VAZIO/NULO DA CREW) ---"
+
+        # Log do resultado bruto recebido
+        print(f"    [Lote {batch_number}] Resultado bruto do kickoff (tipo {type(kickoff_result)}):"
+              f" '{kickoff_result_str}'")
+
+        if report_task:
+            print(f"    [Lote {batch_number}] Tarefa de relatório foi executada. Resultado será processado.")
+        else:
+            print(f"    [Lote {batch_number}] Crew executada apenas para análise.")
+
 
     except Exception as e:
         print(f"\n  [Lote {batch_number}] ERRO CRÍTICO durante a execução do Crew.kickoff(): {e}")
         traceback.print_exc()
         # Registra o erro para o relatório final
-        final_report_content = f"--- Relatório do Lote {batch_number} (ERRO NA EXECUÇÃO DA CREW: {e}) ---"
+        kickoff_result_str = f"--- Relatório do Lote {batch_number} (ERRO NA EXECUÇÃO DA CREW: {e}) ---"
 
-    return final_report_content
+    return kickoff_result_str # Retorna a string resultante (confirmação, erro ou None)
 
 def save_final_report(all_reports_content: List[str], report_dir: str):
     """
-    Consolida todos os conteúdos de relatórios (strings) em um único arquivo final.
+    Consolida todos os conteúdos de relatórios (strings) em um único arquivo final
+    dentro do diretório específico da execução fornecido.
     """
-    print("\n--- Consolidação e Salvamento do Relatório Final ---")
+    print(f"\n--- Consolidação e Salvamento do Relatório Final em '{report_dir}' ---")
     if not all_reports_content:
         print("Nenhum conteúdo de relatório parcial foi gerado para consolidar.")
         return
+    if not os.path.exists(report_dir):
+        print(f"AVISO: O diretório de relatório final '{report_dir}' não existe. Tentando criar...")
+        try:
+            os.makedirs(report_dir, exist_ok=True)
+        except OSError as e:
+            print(f"Erro ao criar o diretório final '{report_dir}': {e}. Não é possível salvar o relatório.")
+            traceback.print_exc()
+            return
+
     print(f"Combinando {len(all_reports_content)} seções de relatório...")
-    # Combina os conteúdos com um separador claro.
-    final_report_text = "\n\n========================================\n\n".join(all_reports_content)
+    # Combina os conteúdos com um separador em Markdown
+    final_report_text = "\n\n---\n\n".join(all_reports_content) # Usar '---' para separador horizontal MD
     # Salva o relatório final combinado.
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    report_filename = f"FINAL_consolidated_drive_report_{timestamp}.md" # Salva como Markdown.
-    report_filepath = os.path.join(report_dir, report_filename)
+    report_filename = f"FINAL_consolidated_drive_report.md" # Salva como Markdown.
+    report_filepath = os.path.join(report_dir, report_filename) # Usa o report_dir (subpasta específica)
     try:
         with open(report_filepath, "w", encoding="utf-8") as f:
-            f.write(f"# Relatório Consolidado de Análise de Documentos - {timestamp}\n\n")
+            # Adiciona um título H1 e talvez a data/hora da geração do consolidado
+            f.write(f"# Relatório Consolidado de Análise de Documentos\n")
+            f.write(f"*Gerado em: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}*\n\n")
             f.write(final_report_text)
         print(f"Relatório final consolidado salvo em: {report_filepath}")
     except IOError as e:
@@ -434,6 +477,23 @@ def save_final_report(all_reports_content: List[str], report_dir: str):
         print(f"Erro inesperado ao salvar o relatório final: {e}")
         traceback.print_exc()
 
+def extract_report_path(confirmation_string: str) -> Optional[str]:
+    """Extrai o caminho do arquivo da string de confirmação da ferramenta."""
+    if not confirmation_string or not isinstance(confirmation_string, str):
+        return None
+    # Tenta encontrar um padrão como "saved to: <caminho>"
+    match = re.search(r"saved to:\s*(.*)", confirmation_string, re.IGNORECASE)
+    if match:
+        path = match.group(1).strip()
+        # Verifica se o caminho parece válido (simplista)
+        if path.endswith(".txt") and os.path.sep in path:
+            # Tenta normalizar o caminho
+            try:
+                return os.path.normpath(path)
+            except Exception:
+                return path # Retorna o caminho como encontrado se a normalização falhar
+    return None # Retorna None se não encontrar um caminho
+
 # Função principal de orquestração de lotes.
 async def process_batches(
         files: List[Dict[str, str]],
@@ -441,15 +501,15 @@ async def process_batches(
         total_batches: int,
         batch_size: int,
         db_manager: DataBaseManager,
-        document_agent: Agent, # Agente já tem LLM
-        reporting_agent: Agent, # Agente já tem LLM
+        document_agent: Agent,
+        reporting_agent: Agent,
         temp_dir: str,
         report_dir: str,
-        llm_instance: LLM, # Recebe a instância crewai.LLM
-        llm_manager: Optional[Any] = None # Mantido opcional se precisar das utils
+        llm_instance: LLM,
 ):
     """
-    Orquestra o processamento dos arquivos em lotes com a instância LLM fornecida.
+    Orquestra o processamento dos arquivos em lotes com a instância LLM fornecida,
+    salvando relatórios no diretório específico fornecido.
     """
     all_final_reports_content = []
     all_downloaded_files_ever = set()
@@ -466,45 +526,63 @@ async def process_batches(
         for file_info in current_batch_files:
             # Passa llm_instance para process_file_in_batch
             coro = process_file_in_batch(
-                file_info, batch_number, db_manager, document_agent, temp_dir, llm_instance
+                file_info, batch_number, db_manager, temp_dir, llm_instance
             )
             batch_coroutines.append(coro)
 
-        # Espera o processamento paralelo (download, extração, criação de task)
+        # Espera o processamento paralelo (download, extração, criação de task de análise)
         gather_results = await asyncio.gather(*batch_coroutines, return_exceptions=True)
 
-        # Processa os resultados para obter tarefas válidas e arquivos baixados
+        # Processa os resultados para obter tarefas de análise válidas e arquivos baixados
         batch_analysis_tasks, batch_downloaded_files = process_batch_results(gather_results, batch_number)
         all_downloaded_files_ever.update(batch_downloaded_files) # Adiciona ao set global
 
-        # Cria a tarefa de relatório para o lote, passando llm_instance
+        # Cria a tarefa de relatório para o lote, passando llm_instance e o diretório específico
         batch_report_task = create_report_task(
-            batch_number, batch_analysis_tasks, reporting_agent, llm_instance
+            batch_number, batch_analysis_tasks, llm_instance, report_dir # Passa report_dir (subpasta)
         )
 
         # Executa a Crew com as tarefas de análise e a tarefa de relatório
-        report_content = await run_batch_crew(
+        # A crew usará o reporting_agent para a batch_report_task
+        report_content_from_crew = await run_batch_crew(
             batch_number,
             batch_analysis_tasks,
             batch_report_task,
-            document_agent, # Agente já tem LLM
-            reporting_agent # Agente já tem LLM
+            document_agent, # Agente para tarefas de análise
+            reporting_agent # Agente para tarefa de relatório
         )
 
-        # Coleta o conteúdo do relatório gerado
-        if report_content:
-            all_final_reports_content.append(report_content)
-        elif batch_analysis_tasks: # Se houve análise mas o relatório falhou
-            all_final_reports_content.append(f"--- Relatório do Lote {batch_number} "
-                                             f"(CONTEÚDO NÃO GERADO OU INVÁLIDO) ---")
+        # Coleta o conteúdo do relatório gerado pela CREW (que é o resultado da última task, a de relatório)
+        if batch_report_task: # Só adiciona algo se uma tarefa de relatório foi criada
+            if report_content_from_crew:
+                # Adiciona a saída da task de relatório (confirmação/caminho ou erro)
+                all_final_reports_content.append(
+                    f"--- Resultado da Tarefa de Relatório do Lote {batch_number} ---\n"
+                    f"{report_content_from_crew}\n"
+                    f"----------------------------------------------------------"
+                )
+            else:
+                # Caso a crew tenha rodado mas retornado None/vazio para a task de relatório
+                all_final_reports_content.append(
+                    f"--- Relatório do Lote {batch_number} ---\n"
+                    f"AVISO: A tarefa de relatório foi executada, mas não retornou confirmação ou caminho do "
+                    f"arquivo.\n"
+                    f"Verifique o diretório: {report_dir}\n"
+                    f"----------------------------------------------------------"
+                )
+        elif batch_analysis_tasks: # Se houve análise mas o relatório não foi nem criado/tentado
+            all_final_reports_content.append(f"--- Análise do Lote {batch_number} (Sem Relatório) ---\n"
+                                             f"Tarefas de análise concluídas, mas a tarefa de geração de relatório "
+                                             f"não foi criada.\n"
+                                             f"----------------------------------------------------------")
         # Se nem análise houve, não adiciona nada
 
-        # Limpa os arquivos temporários deste lote
+        # Limpa os arquivos temporários deste lote (baixados)
         print(f"  [Lote {batch_number}] Iniciando limpeza de arquivos temporários do lote...")
-        cleanup_temp_files(batch_downloaded_files, temp_dir)
+        cleanup_temp_files(batch_downloaded_files, temp_dir) # Limpa de TEMP_DIR
         print(f"--- Lote {batch_number} Finalizado ---")
 
-    # Salva o relatório final consolidado
-    save_final_report(all_final_reports_content, report_dir)
+    # Salva o relatório final consolidado (contendo as confirmações/erros de cada lote)
+    save_final_report(all_final_reports_content, report_dir) # Passa report_dir (subpasta)
 
     print("Processamento de todos os lotes concluído.")

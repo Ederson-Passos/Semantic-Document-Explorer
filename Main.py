@@ -2,6 +2,7 @@ import asyncio
 import os
 import traceback
 import math
+import datetime
 
 from crewai import LLM
 
@@ -10,13 +11,12 @@ from Authentication import GoogleDriveAPI
 from DataBaseManager import initialize_apis_and_db, list_drive_files
 from dotenv import load_dotenv
 
-from FolderManager import create_directories
 from ReportGeneretor import process_batches
 
 DRIVE_FOLDER_ID = "1lXQ7R5z8NGV1YGUncVDHntiOFX35r6WO"
 REPORT_DIR = "google_drive_reports"
 TEMP_DIR = "temp_drive_files"
-BATCH_SIZE = 1  # Define o número de arquivos por lote.
+BATCH_SIZE = 2  # Define o número de arquivos por lote.
 
 
 def initialize_agents(llm_instance: LLM):
@@ -46,7 +46,7 @@ async def main():
         print("AVISO URGENTE: GOOGLE_API_KEY não encontrada!")
         exit(1)
 
-    # --- CRIAÇÃO CENTRALIZADA DO crewai.LLM ---
+    # --- Criação centralizada do crewai.LLM ---
     print("Criando instância centralizada do crewai.LLM...")
     try:
         # Usando o nome do modelo que o LiteLLM/CrewAI deve entender
@@ -60,7 +60,18 @@ async def main():
         traceback.print_exc()
         return
 
-    create_directories(REPORT_DIR, TEMP_DIR)
+    # Criação do diretório de relatório específico para esta execução
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    run_specific_report_dir = os.path.join(REPORT_DIR, f"run_{timestamp}")
+    print(f"Diretório de relatório para esta execução: {run_specific_report_dir}")
+    try:
+        os.makedirs(run_specific_report_dir, exist_ok=True)
+        os.makedirs(TEMP_DIR, exist_ok=True)
+        print(f"Diretórios '{run_specific_report_dir}' e '{TEMP_DIR}' garantidos.")
+    except OSError as e:
+        print(f"Erro ao criar diretórios: {e}")
+        traceback.print_exc()
+        return
 
     print("Autenticando com Google Drive...")
     drive_api = GoogleDriveAPI()
@@ -108,9 +119,8 @@ async def main():
             document_agent=document_agent,
             reporting_agent=reporting_agent,
             temp_dir=TEMP_DIR,
-            report_dir=REPORT_DIR,
-            llm_instance=my_llm,
-            llm_manager=None # Passe None se não usar mais contagem/truncamento via API
+            report_dir=run_specific_report_dir,
+            llm_instance=my_llm
         )
         print("Processamento em lotes concluído.")
     except Exception as e:
