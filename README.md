@@ -1,6 +1,10 @@
 # Requisitos
 
-Certifique-se de ter o Python instalado na versão **3.10.x**. Outras versões podem apresentar problemas de compatibilidade com as dependências do projeto. Você pode baixar o Python 3.10 em [[https://www.python.org/downloads/release/python-3100/](https://www.python.org/downloads/release/python-3100/)].
+Certifique-se de ter o Python instalado na versão **3.10.x**. Outras versões podem apresentar problemas de compatibilidade com as dependências do projeto. Você pode baixar o Python 3.10 em [https://www.python.org/downloads/release/python-3100/](https://www.python.org/downloads/release/python-3100/).
+
+**Observação:** O projeto foi atualizado para utilizar a API do Gemini para embeddings. As instruções abaixo foram atualizadas para refletir essas mudanças.
+
+
 
 ## Configuração das Credenciais do Google Drive para Testes
 
@@ -8,7 +12,7 @@ Este aplicativo utiliza a API do Google Drive para acessar arquivos para anális
 
 1.  **Ativar a API do Google Drive no Google Cloud Platform:**
     * Acesse o [Google Cloud Console](https://console.cloud.google.com/).
-    * Selecione ou crie um novo projeto.
+    * Selecione ou crie um novo projeto. Dê um nome ao projeto, como "SemanticDocumentExplorer".
     * No menu de navegação, vá em "APIs e serviços" > "Biblioteca".
     * Procure por "Google Drive API" e clique em "Ativar".
 
@@ -17,7 +21,7 @@ Este aplicativo utiliza a API do Google Drive para acessar arquivos para anális
     * Clique em "Criar credenciais" e selecione "ID do cliente OAuth".
     * Se você ainda não configurou a tela de consentimento OAuth, será solicitado a fazê-lo:
         * Clique em "Configurar tela de consentimento".
-        * Selecione o tipo de usuário ("Externo" para testes com contas fora da sua organização, a menos que seja um aplicativo interno).
+        * Selecione o tipo de usuário ("Externo" para testes com contas fora da sua organização, a menos que seja um aplicativo interno). **Importante:** Para o tipo de usuário "Externo", você precisará adicionar usuários de teste na tela de consentimento para que eles possam usar o aplicativo.
         * Preencha o nome do aplicativo, e-mail de suporte do usuário e outras informações necessárias.
         * Em "Domínios autorizados", você pode deixar em branco para testes locais.
         * Clique em "Salvar".
@@ -39,76 +43,37 @@ Este aplicativo utiliza a API do Google Drive para acessar arquivos para anális
 
 **Importante:**
 
+* **Para testar com seus próprios arquivos, você precisará modificar o código para apontar para a pasta correta no seu Google Drive.** O projeto atualmente está configurado para processar arquivos de uma pasta específica.
+* **O projeto foi configurado para utilizar a API do Gemini para gerar embeddings.** Você precisará configurar as credenciais da API do Gemini conforme descrito abaixo.
+
+
 * **Não compartilhe seu arquivo `credentials.json` com outras pessoas e não o inclua no repositório Git.** Ele contém informações confidenciais da sua conta do Google.
 * Cada pessoa que for testar o aplicativo precisará seguir esses passos para obter suas próprias credenciais.
 
-## Configurando o Interpretador Python na IntelliJ IDEA / PyCharm
 
-Para garantir que a IDE utilize as dependências corretas do projeto, siga estes passos para configurar o interpretador Python:
+## Configuração da API do Gemini
 
-1.  Abra o projeto "SemanticDocumentExplorer" na IntelliJ IDEA ou PyCharm.
-2.  Vá em **File** > **Settings** (ou **IntelliJ IDEA** > **Preferences** no macOS).
-3.  No painel esquerdo, procure por **Project:** (Seu projeto) > **Python Interpreter**.
-4.  Você deverá ver uma lista de interpretadores. Se o interpretador do seu `venv` não estiver selecionado:
-    * Clique no ícone de engrenagem (⚙️) no canto superior direito da lista de interpretadores.
-    * Selecione **Add...**.
-    * Na janela que aparecer, selecione **Virtual Environment**.
-    * Em "Base interpreter", você pode já ter o Python 3.10 configurado. Em "Location", navegue até a pasta `venv` do seu projeto e selecione o executável do Python:
-        * **Windows:** `venv\Scripts\python.exe`
-        * **macOS/Linux:** `venv/bin/python`
-    * Clique em **OK**.
-    * Certifique-se de que o interpretador recém-adicionado do `venv` esteja selecionado na lista de interpretadores do projeto.
-5.  Clique em **Apply** e depois em **OK** para salvar as configurações.
+Este projeto utiliza a API do Gemini para gerar embeddings. Para utilizá-la, você precisará de uma chave de API. Siga os passos abaixo para obter sua chave e configurar o projeto:
 
-Agora, a IDE deverá reconhecer as bibliotecas instaladas no seu ambiente virtual.
+1. **Obter uma chave de API do Gemini:**
+   * Acesse o [Google AI Studio](https://aistudio.google.com/app/apikey).
+   * Faça login com sua conta Google.
+   * Clique em "Create API key in new project" ou selecione um projeto existente.
+   * Copie a chave de API gerada.
 
-## Configurando o Interpretador Python no Visual Studio Code (VS Code)
+2. **Configurar a chave de API no projeto:**
+   * Crie um arquivo chamado `.env` na raiz do projeto (no mesmo diretório que este README.md).
+   * Adicione a seguinte linha ao arquivo `.env`, substituindo `SUA_CHAVE_DE_API` pela chave que você copiou:
 
-O VS Code geralmente detecta ambientes virtuais automaticamente, mas se precisar configurar manualmente:
+     ```
+     GEMINI_API_KEY=SUA_CHAVE_DE_API
+     ```
 
-1.  Abra a pasta do seu projeto "SemanticDocumentExplorer" no VS Code.
-2.  Abra a paleta de comandos pressionando `Ctrl+Shift+P` (ou `Cmd+Shift+P` no macOS).
-3.  Digite "Python: Select Interpreter" e pressione Enter.
-4.  Uma lista de interpretadores Python será exibida. Procure pelo interpretador que está dentro da pasta `venv` do seu projeto:
-    * O caminho deverá ser algo como:
-        * `G:\Meu Drive\Work\Semantic Document Explorer\SemanticDocumentExplorer\venv\Scripts\python.exe` (Windows)
-        * `G:\Meu Drive\Work\Semantic Document Explorer\SemanticDocumentExplorer\venv/bin/python` (macOS/Linux)
-5.  Selecione o interpretador correto do `venv`.
+   * **Importante:** O arquivo `.env` não deve ser incluído no repositório Git, pois contém informações sensíveis. Certifique-se de adicioná-lo ao seu arquivo `.gitignore`.
 
-O VS Code agora usará este interpretador para o seu projeto. Você pode verificar o interpretador selecionado no canto inferior esquerdo da janela do VS Code.
-
-## Configuração do Weaviate
-
-Este projeto utiliza o [Weaviate](https://weaviate.io/), um banco de dados vetorial de código aberto. Para executar este projeto corretamente, você precisará ter uma instância do Weaviate rodando e configurar o cliente Python (`weaviate-client`) adequadamente.
-
-**Opções para Executar o Weaviate:**
-
-Você tem algumas opções para executar o Weaviate localmente:
-
-**1. Usando Docker (Recomendado para Facilidade e Consistência)**
-
-Se você já tem o [Docker](https://www.docker.com/) instalado, esta é a maneira mais simples de iniciar uma instância do Weaviate com configurações padrão para desenvolvimento:
-
-```bash
-docker run -d --name=weaviate -p 8080:8080 -p 50051:50051 cr.weaviate.io/semitechnologies/weaviate:1.24.3
-```
-
-**2. Execução Local (Sem Docker)**
-
-Se você preferir não usar o Docker, você pode executar o Weaviate diretamente no seu sistema. Para isso, siga as instruções de download e execução dos binários disponíveis na documentação oficial do Weaviate. Este método pode exigir que você configure algumas dependências do sistema manualmente.
-
-**3. Modo Embedded (Para Desenvolvimento e Testes)**
-
-Para um desenvolvimento rápido e testes locais, a biblioteca weaviate-client (versão 3 e superior) permite executar o Weaviate diretamente dentro da sua aplicação Python. Se você optar por este método, certifique-se de configurar o cliente Weaviate no seu código para usar o modo embedded (consulte a documentação do weaviate-client para detalhes).
-
-### Configuração do Cliente Python Weaviate
-
-Para interagir com o Weaviate a partir do seu código Python, você precisará da biblioteca weaviate-client.
-
-**Instalação:**
-
-Instale ou atualize a biblioteca weaviate-client para a versão 3.26.7 ou superior, que é necessária para usar as novas formas de inicialização do cliente:
-```bash
-pip install weaviate-client
-```
+3. **Instalar a biblioteca do Gemini:**
+   * Certifique-se de que a biblioteca `google-generativeai` esteja instalada no seu ambiente virtual. Se não estiver, instale-a usando o pip:
+     ```bash
+     pip install google-generativeai
+     ```
 
